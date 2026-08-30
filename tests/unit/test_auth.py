@@ -7,7 +7,7 @@ import stat
 
 import pytest
 
-from zello_dmr_bridge.zello.auth import AuthError, TokenStore, build_logon_credentials
+from zello_link.zello.auth import AuthError, TokenStore, build_logon_credentials
 
 
 class TestTokenStore:
@@ -89,13 +89,13 @@ class TestTokenStore:
             os.chmod(target, 0o700)
 
     def test_saved_token_is_registered_for_redaction(self, tmp_path):
-        from zello_dmr_bridge.logging_setup import REDACTED, SECRETS
+        from zello_link.logging_setup import REDACTED, SECRETS
 
         TokenStore(tmp_path / "t").save("very-secret-refresh-token")
         assert SECRETS.scrub("rt=very-secret-refresh-token") == f"rt={REDACTED}"
 
     def test_loaded_token_is_registered_for_redaction(self, tmp_path):
-        from zello_dmr_bridge.logging_setup import REDACTED, SECRETS
+        from zello_link.logging_setup import REDACTED, SECRETS
 
         path = tmp_path / "t"
         path.write_text("loaded-secret-refresh-token")

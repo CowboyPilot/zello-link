@@ -13,7 +13,7 @@ import struct
 
 import pytest
 
-from zello_dmr_bridge.zello import protocol as p
+from zello_link.zello import protocol as p
 
 
 class TestCodecHeader:

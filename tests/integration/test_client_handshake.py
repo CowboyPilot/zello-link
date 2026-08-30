@@ -19,8 +19,8 @@ import json
 import pytest
 import yaml
 
-from zello_dmr_bridge.config import load_config
-from zello_dmr_bridge.zello.client import ZelloClient, ZelloError
+from zello_link.config import load_config
+from zello_link.zello.client import ZelloClient, ZelloError
 
 CONFIG = {
     "config_version": 1,
@@ -297,7 +297,7 @@ class TestChannelReadiness:
         import logging
 
         client = ZelloClient(cfg)
-        with caplog.at_level(logging.DEBUG, logger="zello_dmr_bridge.zello"):
+        with caplog.at_level(logging.DEBUG, logger="zello_link.zello"):
             await client._handle_text(json.dumps({"command": "on_some_new_thing"}))
         assert any("unhandled server message" in r.message for r in caplog.records)
 
@@ -314,7 +314,7 @@ class TestChannelErrorDiagnostics:
         import logging
 
         client = ZelloClient(cfg)
-        with caplog.at_level(logging.WARNING, logger="zello_dmr_bridge.zello"):
+        with caplog.at_level(logging.WARNING, logger="zello_link.zello"):
             await client._handle_text(json.dumps({
                 "command": "on_channel_status", "channel": "C",
                 "status": "offline", "users_online": 0,

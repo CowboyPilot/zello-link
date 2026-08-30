@@ -1,6 +1,6 @@
 @echo off
 rem =====================================================================
-rem  Install zello-dmr-bridge and its dependencies on Windows.
+rem  Install zello-link and its dependencies on Windows.
 rem
 rem    install.bat            full install, including hardware extras
 rem    install.bat --dev      also install test tooling
@@ -52,7 +52,7 @@ if exist "%VENV%\Scripts\python.exe" (
 echo   ok    pip up to date
 
 echo.
-echo === Installing zello-dmr-bridge[%EXTRAS%] ===
+echo === Installing zello-link[%EXTRAS%] ===
 "%VENV%\Scripts\python.exe" -m pip install --quiet -e ".[%EXTRAS%]"
 if !errorlevel! neq 0 (
     echo   FAIL  pip install failed
@@ -67,7 +67,7 @@ echo   ok    installed
 echo.
 echo === Verifying ===
 "%VENV%\Scripts\python.exe" -c "import importlib;^
- checks=[('package imports',lambda: importlib.import_module('zello_dmr_bridge')),^
+ checks=[('package imports',lambda: importlib.import_module('zello_link')),^
  ('numpy',lambda: importlib.import_module('numpy')),^
  ('websockets',lambda: importlib.import_module('websockets')),^
  ('PortAudio (audio I/O)',lambda: __import__('sounddevice').query_devices()),^
@@ -76,7 +76,7 @@ echo === Verifying ===
  [print('  ok    '+n) if (lambda f: (f(), True)[1])(f) else None for n,f in checks]" 2>nul
 if !errorlevel! neq 0 echo   warn  some optional components are unavailable
 
-"%VENV%\Scripts\python.exe" -c "from zello_dmr_bridge.zello.opus import load_libopus; load_libopus(); print('  ok    libopus (codec)')" 2>nul
+"%VENV%\Scripts\python.exe" -c "from zello_link.zello.opus import load_libopus; load_libopus(); print('  ok    libopus (codec)')" 2>nul
 if !errorlevel! neq 0 (
     echo   warn  libopus NOT found - the bridge cannot encode or decode audio
     echo.
@@ -94,13 +94,13 @@ echo     1. Copy the example config and edit it:
 echo          copy examples\bridge.yaml my-bridge.yaml
 echo.
 echo     2. Pick your audio devices interactively:
-echo          .venv\Scripts\zello-dmr-bridge --config my-bridge.yaml --list-audio-devices
+echo          .venv\Scripts\zello-link --config my-bridge.yaml --list-audio-devices
 echo.
 echo     3. Check the config without connecting or keying the radio:
-echo          .venv\Scripts\zello-dmr-bridge --config my-bridge.yaml --validate
+echo          .venv\Scripts\zello-link --config my-bridge.yaml --validate
 echo.
 echo     4. Set the receive level, watching the live meter:
-echo          .venv\Scripts\zello-dmr-bridge --config my-bridge.yaml --cos-monitor
+echo          .venv\Scripts\zello-link --config my-bridge.yaml --cos-monitor
 echo.
 echo   Secrets belong in the environment, not the config file:
 echo     set ZELLO_AUTH_TOKEN=...

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from zello_dmr_bridge.audio.devices import (
+from zello_link.audio.devices import (
     AudioDevice,
     DeviceError,
     format_device_table,

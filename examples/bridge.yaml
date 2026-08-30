@@ -4,7 +4,7 @@
 # device, TTY, or HID path -- see the multi-instance notes at the bottom.
 #
 # Validate before deploying:
-#   zello-dmr-bridge --config examples/bridge.yaml --validate
+#   zello-link --config examples/bridge.yaml --validate
 #
 # Secrets: prefer ${ENV_VAR} indirection over literals. If you do put a
 # literal here, chmod 600 the file and own it as the service user.
@@ -27,7 +27,7 @@ zello:
 
   # Written atomically with owner-only permissions. Without it, every
   # reconnect re-authenticates with full credentials instead of a token.
-  refresh_token_file: "/var/lib/zello-dmr/west.refresh"
+  refresh_token_file: "/var/lib/zello-link/west.refresh"
 
   platform_name: "DMR Gateway - West"
 
@@ -184,7 +184,7 @@ hardware:
 
 logging:
   console: true
-  file: "/var/log/zello-dmr/west.log"
+  file: "/var/log/zello-link/west.log"
   max_bytes: 10485760
   backup_count: 5
   include_audio_levels: false  # DEBUG-level per-block levels; noisy
@@ -200,5 +200,5 @@ metrics:
 # input_device/output_device, tty_device (or hid_device), log file, and
 # refresh_token_file. Then:
 #
-#   sudo systemctl enable --now zello-dmr-bridge@west
-#   sudo systemctl enable --now zello-dmr-bridge@east
+#   sudo systemctl enable --now zello-link@west
+#   sudo systemctl enable --now zello-link@east

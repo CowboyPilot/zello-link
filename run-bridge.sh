@@ -23,6 +23,6 @@ fi
 
 set -a; source bridge-local.env; set +a
 
-exec .venv/bin/python -m zello_dmr_bridge \
+exec .venv/bin/python -m zello_link \
     --config bridge-local.yaml \
     "$@"

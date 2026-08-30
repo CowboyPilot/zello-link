@@ -124,7 +124,7 @@ class ZelloConfig(_Model):
     password: SecretStr | None = None
     auth_token: SecretStr | None = None
     refresh_token_file: Path | None = None
-    platform_name: str = "zello-dmr-bridge"
+    platform_name: str = "zello-link"
 
     reconnect_initial_s: float = Field(default=1.0, gt=0, le=60)
     reconnect_max_s: float = Field(default=60.0, gt=0, le=3600)

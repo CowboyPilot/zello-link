@@ -37,7 +37,7 @@ class SerialPtt(PttBackend):
         except ImportError as e:
             raise PttError(
                 "pyserial is required for ptt.mode='serial'. Install with:\n"
-                "  pip install 'zello-dmr-bridge[serial]'"
+                "  pip install 'zello-link[serial]'"
             ) from e
 
         try:

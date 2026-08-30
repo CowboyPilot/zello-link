@@ -35,8 +35,8 @@ EXIT_RUNTIME = 4
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="zello-dmr-bridge",
-        description="Bridge a Zello channel to a DMR radio through an AIOC interface.",
+        prog="zello-link",
+        description="Bridge a Zello channel to a radio through a CM108-class USB interface.",
     )
     p.add_argument("--config", required=True, metavar="PATH", help="YAML configuration file")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

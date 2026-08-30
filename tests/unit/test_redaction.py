@@ -8,7 +8,7 @@ import logging
 import pytest
 from pydantic import SecretStr
 
-from zello_dmr_bridge.logging_setup import (
+from zello_link.logging_setup import (
     REDACTED,
     RedactingFormatter,
     SecretRegistry,
@@ -135,8 +135,8 @@ class TestConfigIntegration:
     def test_config_secrets_are_registered(self, tmp_path, monkeypatch):
         import yaml
 
-        from zello_dmr_bridge.config import load_config
-        from zello_dmr_bridge.logging_setup import SECRETS, register_config_secrets
+        from zello_link.config import load_config
+        from zello_link.logging_setup import SECRETS, register_config_secrets
 
         monkeypatch.setenv("ZP", "config-file-password-value")
         cfg_path = tmp_path / "b.yaml"

@@ -11,8 +11,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from zello_dmr_bridge.audio.levels import BlockStats, CosEvent
-from zello_dmr_bridge.hardware.cos import CosBackend
+from zello_link.audio.levels import BlockStats, CosEvent
+from zello_link.hardware.cos import CosBackend
 
 
 class FakeClock:

@@ -10,8 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from zello_dmr_bridge.zello import opus as op
-from zello_dmr_bridge.zello.protocol import CodecHeader
+from zello_link.zello import opus as op
+from zello_link.zello.protocol import CodecHeader
 
 requires_opus = pytest.mark.skipif(not op.is_available(), reason="libopus not installed")
 

@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from zello_dmr_bridge.hardware.aioc_hid import Cm108Report
-from zello_dmr_bridge.hardware.ptt import NullPtt, PttBackend, PttError, SafePtt
+from zello_link.hardware.aioc_hid import Cm108Report
+from zello_link.hardware.ptt import NullPtt, PttBackend, PttError, SafePtt
 
 
 class FlakyPtt(NullPtt):

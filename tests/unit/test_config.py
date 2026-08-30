@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import yaml
 
-from zello_dmr_bridge.config import (
+from zello_link.config import (
     CONFIG_VERSION,
     ConfigError,
     expand_env,

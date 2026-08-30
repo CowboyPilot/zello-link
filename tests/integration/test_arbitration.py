@@ -13,11 +13,11 @@ import pytest
 import yaml
 
 from tests.fakes import FakeAudioSink, FakeCos, FakeEncoder, FakeZello, block
-from zello_dmr_bridge.config import load_config
-from zello_dmr_bridge.controller import BridgeController, StreamMeta
-from zello_dmr_bridge.hardware.ptt import NullPtt, SafePtt
-from zello_dmr_bridge.state import State
-from zello_dmr_bridge.zello.protocol import CodecHeader
+from zello_link.config import load_config
+from zello_link.controller import BridgeController, StreamMeta
+from zello_link.hardware.ptt import NullPtt, SafePtt
+from zello_link.state import State
+from zello_link.zello.protocol import CodecHeader
 
 CONFIG = {
     "config_version": 1,

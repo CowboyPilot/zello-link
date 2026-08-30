@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install zello-dmr-bridge and its dependencies on Linux or macOS.
+# Install zello-link and its dependencies on Linux or macOS.
 #
 #   ./install.sh              full install, including hardware extras
 #   ./install.sh --dev        also install test tooling
@@ -106,7 +106,7 @@ fi
 ok "pip up to date"
 
 # -- 4. The package -------------------------------------------------------
-say "Installing zello-dmr-bridge[$EXTRAS]"
+say "Installing zello-link[$EXTRAS]"
 if ! "$VENV/bin/python" -m pip install --quiet -e ".[$EXTRAS]"; then
     bad "pip install failed"
     echo
@@ -131,12 +131,12 @@ def check(label, fn):
         print(f"  \033[33mwarn\033[0m  {label}: {e}")
         return False
 
-check("package imports", lambda: importlib.import_module("zello_dmr_bridge"))
+check("package imports", lambda: importlib.import_module("zello_link"))
 check("numpy", lambda: importlib.import_module("numpy"))
 check("websockets", lambda: importlib.import_module("websockets"))
 
 def opus():
-    from zello_dmr_bridge.zello.opus import load_libopus
+    from zello_link.zello.opus import load_libopus
     load_libopus()
 check("libopus (codec)", opus)
 
@@ -157,13 +157,13 @@ cat <<'EOF'
          cp examples/bridge.yaml my-bridge.yaml
 
     2. Pick your audio devices interactively (writes them into the config):
-         .venv/bin/zello-dmr-bridge --config my-bridge.yaml --list-audio-devices
+         .venv/bin/zello-link --config my-bridge.yaml --list-audio-devices
 
     3. Check the config without connecting or keying the radio:
-         .venv/bin/zello-dmr-bridge --config my-bridge.yaml --validate
+         .venv/bin/zello-link --config my-bridge.yaml --validate
 
     4. Set the receive level, watching the live meter:
-         .venv/bin/zello-dmr-bridge --config my-bridge.yaml --cos-monitor
+         .venv/bin/zello-link --config my-bridge.yaml --cos-monitor
 
   Secrets belong in the environment, not the config file:
     export ZELLO_AUTH_TOKEN='...'   # from https://developers.zello.com/

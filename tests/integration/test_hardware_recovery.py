@@ -14,10 +14,10 @@ import numpy as np
 import yaml
 
 from tests.fakes import FakeAudioSink, FakeCos, FakeEncoder, FakeZello
-from zello_dmr_bridge.config import load_config
-from zello_dmr_bridge.controller import BridgeController
-from zello_dmr_bridge.hardware.ptt import NullPtt, PttError, SafePtt
-from zello_dmr_bridge.hardware.supervisor import HardwareSupervisor
+from zello_link.config import load_config
+from zello_link.controller import BridgeController
+from zello_link.hardware.ptt import NullPtt, PttError, SafePtt
+from zello_link.hardware.supervisor import HardwareSupervisor
 
 BASE = {
     "config_version": 1,

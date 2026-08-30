@@ -49,7 +49,7 @@ def _import_sounddevice() -> Any:
     except (ImportError, OSError) as e:
         raise DeviceError(
             "sounddevice/PortAudio is required for audio I/O. Install with:\n"
-            "  pip install 'zello-dmr-bridge[audio]'\n"
+            "  pip install 'zello-link[audio]'\n"
             "On Debian/Raspberry Pi OS also: sudo apt install libportaudio2"
         ) from e
     return sounddevice

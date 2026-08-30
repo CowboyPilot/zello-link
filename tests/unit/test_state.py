@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from zello_dmr_bridge.state import (
+from zello_link.state import (
     LEGAL_TRANSITIONS,
     RF_TO_ZELLO_STATES,
     ZELLO_TO_RF_STATES,

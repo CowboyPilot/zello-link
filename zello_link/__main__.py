@@ -1,4 +1,4 @@
-"""Support `python -m zello_dmr_bridge --config ...`."""
+"""Support `python -m zello_link --config ...`."""
 
 import sys
 

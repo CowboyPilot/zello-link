@@ -1,20 +1,34 @@
-# zello-dmr-bridge
+# zello-link
 
-Headless bridge between a Zello Friends & Family channel and a dedicated
-encrypted DMR radio, over an AIOC USB radio interface.
+Headless bridge between a Zello channel and a radio, over a CM108-class USB
+interface such as the AIOC.
 
-The radio remains responsible for RF, DMR vocoding, talkgroup operation, and
-encryption. This service transports audio and PTT/COS only. It never contains,
-requests, or handles a DMR encryption key.
+The radio side stays entirely the radio's business — RF, modulation, vocoding
+(DMR, analogue FM, whatever it runs), talkgroups, and encryption. This service
+transports audio and PTT/COS only. It never contains, requests, or handles an
+encryption key.
+
+Originally built against an encrypted DMR handheld, but nothing in it is
+DMR-specific: any radio reachable through a CM108-style interface works, and
+an AllStarLink backend over `chan_usrp` is specified for a future release —
+which needs no radio attached at all.
 
 ## What it does
 
 ```
-Zello channel  <--TLS WebSocket-->  bridge  <--USB audio + PTT/COS-->  DMR radio
+Zello channel  <--TLS WebSocket-->  zello-link  <--USB audio + PTT/COS-->  radio
+```
+
+Planned second backend, replacing the radio side entirely:
+
+```
+Zello channel  <--TLS WebSocket-->  zello-link  <--UDP/chan_usrp-->  AllStarLink
 ```
 
 - Connects directly to the Zello Channel API. No Android app, no Waydroid, no
   GUI automation, no VOX, no MMDVM modem.
+- Backend-agnostic core: arbitration, Opus, and the state machine do not know
+  what is on the radio side.
 - Half-duplex, first-talker-wins arbitration. The bridge never keys RF and
   transmits to Zello at the same time.
 - Fails safe: PTT is driven OFF on startup, shutdown, exception, disconnect,
@@ -60,7 +74,7 @@ With a config file in hand, this lists the audio devices and offers to write
 your selection into it:
 
 ```bash
-.venv/bin/zello-dmr-bridge --config my-bridge.yaml --list-audio-devices
+.venv/bin/zello-link --config my-bridge.yaml --list-audio-devices
 ```
 
 It prompts for the input device, the output device, and the COS source —
@@ -75,7 +89,7 @@ from scripts.
 ## Run
 
 ```bash
-zello-dmr-bridge --config /etc/zello-dmr/west.yaml
+zello-link --config /etc/zello-link/west.yaml
 ```
 
 Start from [`examples/bridge.yaml`](examples/bridge.yaml) — every option is
@@ -135,9 +149,9 @@ distinct `instance.name`, audio devices, TTY/HID path, log file, and
 `refresh_token_file`.
 
 ```bash
-sudo cp systemd/zello-dmr-bridge@.service /etc/systemd/system/
-sudo systemctl enable --now zello-dmr-bridge@west
-sudo systemctl enable --now zello-dmr-bridge@east
+sudo cp systemd/zello-link@.service /etc/systemd/system/
+sudo systemctl enable --now zello-link@west
+sudo systemctl enable --now zello-link@east
 ```
 
 Prefer stable identifiers (`/dev/serial/by-id/...`) over `/dev/ttyACM0`, which

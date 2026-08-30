@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "zello-dmr-bridge"
+name = "zello-link"
 version = "0.1.0"
-description = "Headless bridge between a Zello Friends & Family channel and a DMR radio via an AIOC USB interface"
+description = "Headless bridge between a Zello channel and a radio (or an AllStarLink node) over a CM108-class USB interface"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -35,15 +35,15 @@ dev = [
 ]
 
 [project.scripts]
-zello-dmr-bridge = "zello_dmr_bridge.cli:main"
+zello-link = "zello_link.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["zello_dmr_bridge*"]
+include = ["zello_link*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = ["error::DeprecationWarning:zello_dmr_bridge.*"]
+filterwarnings = ["error::DeprecationWarning:zello_link.*"]
 
 # libopus is a system library, not a wheel. Install with:
 #   Debian/RPi OS:  sudo apt install libopus0 libportaudio2

@@ -102,7 +102,7 @@ def _import_hid() -> Any:
     except ImportError as e:
         raise PttError(
             "hidapi is required for CM108/HID PTT or AIOC COS. Install with:\n"
-            "  pip install 'zello-dmr-bridge[hid]'\n"
+            "  pip install 'zello-link[hid]'\n"
             "On Debian/Raspberry Pi OS also: sudo apt install libhidapi-hidraw0"
         ) from e
     return hid

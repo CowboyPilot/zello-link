@@ -8,7 +8,7 @@ import yaml
 
 import pytest
 
-from zello_dmr_bridge.cli import EXIT_CONFIG, EXIT_DEVICE, EXIT_OK, build_parser, main
+from zello_link.cli import EXIT_CONFIG, EXIT_DEVICE, EXIT_OK, build_parser, main
 
 CONFIG = {
     "config_version": 1,
@@ -97,7 +97,7 @@ class TestValidate:
 
     def test_validate_does_not_key_ptt(self, cfg_path, monkeypatch):
         """AT-02: config validation must never touch the transmitter."""
-        import zello_dmr_bridge.hardware.ptt as ptt_module
+        import zello_link.hardware.ptt as ptt_module
 
         keyed = []
         original = ptt_module.NullPtt.key
@@ -115,7 +115,7 @@ class TestRenderMeter:
     """The level meter used for setting a radio's volume knob."""
 
     def setup_method(self):
-        from zello_dmr_bridge.diagnostics import status
+        from zello_link.diagnostics import status
 
         self.status = status
 
@@ -168,7 +168,7 @@ class TestRenderMeter:
 
 class TestRollingPeak:
     def test_holds_the_peak_within_the_window(self):
-        from zello_dmr_bridge.diagnostics.status import RollingPeak
+        from zello_link.diagnostics.status import RollingPeak
 
         rp = RollingPeak(window_s=5.0)
         rp.add(-40.0, 100.0)
@@ -176,19 +176,19 @@ class TestRollingPeak:
         assert rp.add(-40.0, 102.0) == -6.0
 
     def test_peak_expires_after_the_window(self):
-        from zello_dmr_bridge.diagnostics.status import RollingPeak
+        from zello_link.diagnostics.status import RollingPeak
 
         rp = RollingPeak(window_s=5.0)
         rp.add(-6.0, 100.0)
         assert rp.add(-40.0, 106.0) == -40.0
 
     def test_empty_reads_at_the_floor(self):
-        from zello_dmr_bridge.diagnostics.status import METER_LO, RollingPeak
+        from zello_link.diagnostics.status import METER_LO, RollingPeak
 
         assert RollingPeak().value == METER_LO
 
     def test_does_not_grow_without_bound(self):
-        from zello_dmr_bridge.diagnostics.status import RollingPeak
+        from zello_link.diagnostics.status import RollingPeak
 
         rp = RollingPeak(window_s=1.0)
         for i in range(1000):
@@ -198,22 +198,22 @@ class TestRollingPeak:
 
 class TestVerdict:
     def test_says_turn_down_when_hot(self):
-        from zello_dmr_bridge.diagnostics.status import _verdict
+        from zello_link.diagnostics.status import _verdict
 
         assert "DOWN" in _verdict(-2.0, 0, False)
 
     def test_says_turn_up_when_quiet(self):
-        from zello_dmr_bridge.diagnostics.status import _verdict
+        from zello_link.diagnostics.status import _verdict
 
         assert "UP" in _verdict(-40.0, 0, False)
 
     def test_says_ok_in_window(self):
-        from zello_dmr_bridge.diagnostics.status import _verdict
+        from zello_link.diagnostics.status import _verdict
 
         assert "OK" in _verdict(-9.0, 0, False)
 
     def test_clipping_takes_priority(self):
-        from zello_dmr_bridge.diagnostics.status import _verdict
+        from zello_link.diagnostics.status import _verdict
 
         assert "CLIPPING" in _verdict(-9.0, 5, False)
 
@@ -233,26 +233,26 @@ class TestStatusLine:
     def test_disabled_when_not_a_tty(self):
         import io
 
-        from zello_dmr_bridge.logging_setup import StatusLine
+        from zello_link.logging_setup import StatusLine
 
         assert StatusLine(io.StringIO()).enabled is False
 
     def test_non_tty_writes_nothing(self):
         import io
 
-        from zello_dmr_bridge.logging_setup import StatusLine
+        from zello_link.logging_setup import StatusLine
 
         s = io.StringIO()
         StatusLine(s).set("meter")
         assert s.getvalue() == "", "escape codes leaked into a non-TTY stream"
 
     def test_enabled_on_a_tty(self):
-        from zello_dmr_bridge.logging_setup import StatusLine
+        from zello_link.logging_setup import StatusLine
 
         assert StatusLine(self._stream()).enabled is True
 
     def test_set_erases_before_drawing(self):
-        from zello_dmr_bridge.logging_setup import StatusLine
+        from zello_link.logging_setup import StatusLine
 
         stream = self._stream()
         StatusLine(stream).set("hello")
@@ -260,7 +260,7 @@ class TestStatusLine:
         assert "\033[2K" in out and out.endswith("hello")
 
     def test_clear_then_redraw_restores_the_line(self):
-        from zello_dmr_bridge.logging_setup import StatusLine
+        from zello_link.logging_setup import StatusLine
 
         stream = self._stream()
         sl = StatusLine(stream)
@@ -270,7 +270,7 @@ class TestStatusLine:
         assert stream.getvalue().endswith("meter")
 
     def test_redraw_is_idempotent_while_visible(self):
-        from zello_dmr_bridge.logging_setup import StatusLine
+        from zello_link.logging_setup import StatusLine
 
         stream = self._stream()
         sl = StatusLine(stream)
@@ -280,7 +280,7 @@ class TestStatusLine:
         assert stream.getvalue() == before
 
     def test_finish_leaves_no_text(self):
-        from zello_dmr_bridge.logging_setup import StatusLine
+        from zello_link.logging_setup import StatusLine
 
         stream = self._stream()
         sl = StatusLine(stream)
@@ -292,7 +292,7 @@ class TestStatusLine:
         """The whole point: a log line must not land on top of the meter."""
         import logging
 
-        from zello_dmr_bridge.logging_setup import StatusLine, _StatusAwareHandler
+        from zello_link.logging_setup import StatusLine, _StatusAwareHandler
 
         stream = self._stream()
         sl = StatusLine(stream)
@@ -312,7 +312,7 @@ class TestStatusLine:
 
 class TestStatusLineRendering:
     def _render(self, **kw):
-        from zello_dmr_bridge.diagnostics.status import render_status_line
+        from zello_link.diagnostics.status import render_status_line
 
         kw.setdefault("color", False)
         return render_status_line(**kw)
@@ -326,7 +326,7 @@ class TestStatusLineRendering:
         assert line.index("[") < line.index("]")
 
     def test_peak_inside_brackets_when_in_window(self):
-        from zello_dmr_bridge.diagnostics.status import (
+        from zello_link.diagnostics.status import (
             TARGET_PEAK_HIGH,
             TARGET_PEAK_LOW,
         )
@@ -364,7 +364,7 @@ class TestStatusLineFitsTheTerminal:
     """
 
     def _line(self, total_width, **kw):
-        from zello_dmr_bridge.diagnostics.status import render_status_line
+        from zello_link.diagnostics.status import render_status_line
 
         kw.setdefault("color", False)
         kw.setdefault("threshold", -50.0)
@@ -385,21 +385,21 @@ class TestStatusLineFitsTheTerminal:
 
     @pytest.mark.parametrize("peak", [-60.0, -51.0, -20.0, -9.0, -0.1, 0.0])
     def test_fits_at_every_level(self, peak):
-        from zello_dmr_bridge.diagnostics.status import render_status_line
+        from zello_link.diagnostics.status import render_status_line
 
         line = render_status_line(-30.0, peak, threshold=-50.0,
                                   total_width=80, color=False)
         assert len(line) <= 79
 
     def test_narrow_terminal_still_shows_a_usable_bar(self):
-        from zello_dmr_bridge.diagnostics.status import _MIN_BAR
+        from zello_link.diagnostics.status import _MIN_BAR
 
         line = self._line(60)
         bar = line[line.index("=") : line.rindex("-") + 1]
         assert len(bar) >= _MIN_BAR
 
     def test_wide_terminal_does_not_produce_an_absurd_bar(self):
-        from zello_dmr_bridge.diagnostics.status import _MAX_BAR
+        from zello_link.diagnostics.status import _MAX_BAR
 
         assert len(self._line(300)) < _MAX_BAR + 60
 
@@ -411,7 +411,7 @@ class TestStatusLineFitsTheTerminal:
     def test_detects_terminal_width_when_not_given(self, monkeypatch):
         import shutil
 
-        from zello_dmr_bridge.diagnostics.status import render_status_line
+        from zello_link.diagnostics.status import render_status_line
 
         monkeypatch.setattr(
             shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((64, 24))

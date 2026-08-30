@@ -200,7 +200,7 @@ def setup_logging(
     """
     register_config_secrets(cfg)
 
-    root = logging.getLogger("zello_dmr_bridge")
+    root = logging.getLogger("zello_link")
     root.setLevel(cfg.instance.log_level)
     root.propagate = False
 
@@ -251,7 +251,7 @@ def bind(name: str, **context: Any) -> logging.LoggerAdapter:
     Context is rendered as trailing ``key=value`` pairs so operator-facing
     INFO lines stay readable in a terminal while remaining greppable.
     """
-    logger = logging.getLogger(f"zello_dmr_bridge.{name}")
+    logger = logging.getLogger(f"zello_link.{name}")
     return _ContextAdapter(logger, context)
 
 

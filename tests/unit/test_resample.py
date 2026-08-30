@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from zello_dmr_bridge.audio.resample import (
+from zello_link.audio.resample import (
     Resampler,
     ResamplerError,
     resample_block,

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from zello_dmr_bridge.audio.devices import AudioDevice
-from zello_dmr_bridge.diagnostics.setup_wizard import (
+from zello_link.audio.devices import AudioDevice
+from zello_link.diagnostics.setup_wizard import (
     _device_value,
     detect_cos_choices,
     set_config_value,
@@ -151,7 +151,7 @@ class TestCosChoices:
             assert c.label
 
     def test_aioc_options_depend_on_detection(self, monkeypatch):
-        import zello_dmr_bridge.hardware.aioc_hid as hid
+        import zello_link.hardware.aioc_hid as hid
 
         monkeypatch.setattr(hid, "find_aioc_hid_path", lambda **kw: ["/dev/hidraw0"])
         values = [c.value for c in detect_cos_choices()]
@@ -159,14 +159,14 @@ class TestCosChoices:
         assert "aioc_hardware" in values
 
     def test_aioc_marked_unavailable_without_hardware(self, monkeypatch):
-        import zello_dmr_bridge.hardware.aioc_hid as hid
+        import zello_link.hardware.aioc_hid as hid
 
         monkeypatch.setattr(hid, "find_aioc_hid_path", lambda **kw: [])
         labels = " ".join(c.label for c in detect_cos_choices())
         assert "unavailable" in labels
 
     def test_missing_hidapi_does_not_crash(self, monkeypatch):
-        import zello_dmr_bridge.hardware.aioc_hid as hid
+        import zello_link.hardware.aioc_hid as hid
 
         def boom(**kw):
             raise RuntimeError("hidapi is required")
@@ -240,7 +240,7 @@ class TestAiocCosWarnings:
     def _warnings(self, tmp_path, mode):
         import yaml
 
-        from zello_dmr_bridge.config import load_config
+        from zello_link.config import load_config
 
         data = {
             "config_version": 1,
@@ -266,7 +266,7 @@ class TestAiocCosWarnings:
     def test_internal_audio_gets_no_such_warning(self, tmp_path):
         import yaml
 
-        from zello_dmr_bridge.config import load_config
+        from zello_link.config import load_config
 
         data = {
             "config_version": 1,
