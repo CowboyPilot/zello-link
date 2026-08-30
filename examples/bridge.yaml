@@ -1,0 +1,204 @@
+# Zello <-> DMR bridge configuration.
+#
+# One file per bridge instance. Two instances must never share an audio
+# device, TTY, or HID path -- see the multi-instance notes at the bottom.
+#
+# Validate before deploying:
+#   zello-dmr-bridge --config examples/bridge.yaml --validate
+#
+# Secrets: prefer ${ENV_VAR} indirection over literals. If you do put a
+# literal here, chmod 600 the file and own it as the service user.
+
+config_version: 1
+
+instance:
+  name: west-bridge
+  log_level: INFO              # DEBUG | INFO | WARNING | ERROR | CRITICAL
+
+zello:
+  server: "wss://zello.io/ws"
+  channel: "Event Security"
+  username: "bridge-account"
+
+  # Supply auth_token, password, or both. An unset ${VAR} is a startup error,
+  # never an empty credential.
+  auth_token: "${ZELLO_AUTH_TOKEN}"
+  password: "${ZELLO_PASSWORD}"
+
+  # Written atomically with owner-only permissions. Without it, every
+  # reconnect re-authenticates with full credentials instead of a token.
+  refresh_token_file: "/var/lib/zello-dmr/west.refresh"
+
+  platform_name: "DMR Gateway - West"
+
+  reconnect_initial_s: 1.0
+  reconnect_max_s: 60.0
+
+  # Deadline for a WebSocket PONG before the peer is declared dead. This is
+  # the half-open detection: a TCP connection can die without ever sending a
+  # FIN, and ping/pong is what notices.
+  #
+  # It is a pong deadline, NOT an idle-data timeout. An idle channel sends no
+  # application frames at all, so timing out on those disconnects a perfectly
+  # healthy bridge every time nobody is talking -- and each reconnect makes
+  # the server kick the previous session (close code 3003).
+  keepalive_timeout_s: 45.0
+
+opus:
+  sample_rate: 16000
+  frame_ms: 20
+  frames_per_packet: 1         # API allows 1 or 2
+  bitrate: 16000
+  complexity: 5                # 0-10; higher costs CPU. 5 is fine on a Pi.
+  application: "voip"
+
+sound:
+  backend: "sounddevice"
+
+  # Name substring or numeric index. An ambiguous partial match is a startup
+  # error, not a guess -- run --list-audio-devices to see exact names.
+  input_device: "AIOC Audio"
+  output_device: "AIOC Audio"
+
+  # Matching opus.sample_rate keeps a resampler out of the RF->Zello path.
+  # Other rates work (the AIOC advertises 8000-48000) and --validate reports
+  # the exact latency cost. Note that inbound Zello audio is resampled per
+  # stream regardless, because the far end chooses its own rate.
+  sample_rate: 16000
+  channels: 1
+  block_ms: 20                 # must equal opus.frame_ms
+
+  # Gains are RADIO-centric, not sound-card-centric:
+  #   rx_gain_db  audio arriving FROM the radio's receive path (-> Zello)
+  #   tx_gain_db  audio the bridge sends TO the radio's mic input (-> RF)
+  # Calibrate with --cos-monitor, which reports peak level and a clip count.
+  # Prefer fixing levels at the radio/interface before reaching for these.
+  rx_gain_db: 0.0
+  tx_gain_db: 0.0
+
+  # Playback jitter buffer for Zello -> RF. jitter_ms is the steady-state
+  # latency cost; above jitter_max_ms the oldest audio is dropped so the
+  # buffer can never grow into unbounded delay.
+  jitter_ms: 120
+  jitter_max_ms: 400
+
+  capture_queue_ms: 400
+  overflow_policy: "drop_oldest"   # drop_oldest | drop_newest
+
+ptt:
+  mode: "serial"               # serial | cm108_hid | none
+  # Prefer a stable by-id path over /dev/ttyACM0, which renumbers.
+  tty_device: "/dev/serial/by-id/usb-AIOC_All-In-One-Cable_-if00"
+  hid_device: null
+
+  pre_key_ms: 150              # radio transmit attack time; verify on bench
+  post_audio_ms: 120
+  max_tx_s: 180                # hard watchdog, enforced independently
+
+cos:
+  mode: "internal_audio"       # internal_audio | aioc_virtual | aioc_hardware | disabled
+  hid_device: null
+
+  # internal_audio only. Detector floor is -90.3 dBFS; a threshold below that
+  # can never trigger and --validate will warn.
+  #
+  # CALIBRATION, for a radio feeding SQUELCHED audio (bench-verified):
+  #
+  #   1. Squelch the radio, run --cos-monitor, note the idle level. On a
+  #      typical AIOC + HT this is around -55 dBFS.
+  #   2. Set threshold_dbfs about 5 dB ABOVE that idle floor (-50 here).
+  #      With squelched audio any audio at all means a valid carrier, so the
+  #      threshold is only rejecting the interface's own noise -- it is not
+  #      trying to tell speech from noise. Setting it high (e.g. -38) closes
+  #      COS during the quiet gaps between words and splits one transmission
+  #      into several Zello streams.
+  #   3. Key a carrier with NO modulation and confirm COS holds for the whole
+  #      keydown. If it does, audio-level COS is viable on that radio.
+  #   4. Set the radio's volume so speech PEAKS at -10 to -6 dBFS. Watch
+  #      rx_peak_dbfs and rx_clipped_samples in the metrics line: peaks near
+  #      0 dBFS have no headroom and will clip on a strong signal.
+  #
+  # hang_ms is a net-wide cost: it delays the turnaround for the opposite
+  # direction on EVERY transmission. Keep it short (200 ms or so) rather than
+  # using it to paper over a threshold that is set too high.
+  threshold_dbfs: -50.0
+  attack_ms: 60
+  hang_ms: 200
+  startup_ignore_ms: 500
+
+  # Floor on how long COS stays open once it triggers. A transmission is held
+  # for max(min_tx_ms, speech + hang_ms), so:
+  #
+  #   min_tx_ms: 500, hang_ms: 200
+  #     0 ms of speech   -> held  500 ms   (the floor binds)
+  #   300 ms of speech   -> held  500 ms   (300 + 200 = 500)
+  #   301 ms of speech   -> held  501 ms   (speech + hang now binds)
+  #  2000 ms of speech   -> held 2200 ms   (floor has no effect)
+  #
+  # Use it when the radio emits a click as the squelch opens, then a gap,
+  # then speech: the click trips COS, the gap outlasts hang_ms, COS drops,
+  # and the start of the speech is lost re-triggering -- one transmission
+  # arrives on Zello as two. Set min_tx_ms longer than that click-to-speech
+  # gap (measure it with --showmonitor).
+  #
+  # Prefer this over raising hang_ms. The hang delays the turnaround on EVERY
+  # transmission; the floor only affects ones shorter than itself, so long
+  # overs are unaffected. Must be greater than hang_ms or it can never bind.
+  # 0 disables it.
+  #
+  # Bench-verified: 800 ms works on an AIOC + Kenwood-K1 HT with a squelch
+  # click roughly 500 ms ahead of speech. The right value is radio-specific --
+  # a bit longer than that click-to-speech gap. Default stays 0 so a new
+  # deployment opts in deliberately.
+  min_tx_ms: 0
+
+  # AIOC-programmed values (not a second software tail).
+  configure_aioc_on_start: false
+  aioc_threshold: null
+  aioc_hang_ms: 450
+
+bridge:
+  rf_to_zello: true
+  zello_to_rf: true
+
+  arbitration: "first_talker_wins"
+  collision_log: true
+
+  rx_guard_ms: 150
+  tx_guard_ms: 150
+
+  # v0.1 discards a competing Zello stream rather than replaying it late.
+  queue_incoming_zello: false
+
+  # Advisory. --validate warns when pre_key + jitter + block exceeds it.
+  latency_budget_ms: 300
+
+hardware:
+  # Recovery after the USB interface disappears mid-run (observed live as
+  # OSError [Errno 6] Device not configured when the AIOC dropped off the
+  # bus). The bridge fails safe -- PTT off first -- then closes and retries
+  # both audio and PTT together, since they are the same USB device.
+  retry_initial_s: 1.0
+  retry_max_s: 30.0
+  max_attempts: 0              # 0 = retry forever; an appliance should
+
+logging:
+  console: true
+  file: "/var/log/zello-dmr/west.log"
+  max_bytes: 10485760
+  backup_count: 5
+  include_audio_levels: false  # DEBUG-level per-block levels; noisy
+
+metrics:
+  enabled: true
+  interval_s: 60               # periodic structured metrics log line
+
+# ---------------------------------------------------------------------------
+# Multiple bridges on one host
+# ---------------------------------------------------------------------------
+# Copy this file per instance and give each one a distinct instance.name,
+# input_device/output_device, tty_device (or hid_device), log file, and
+# refresh_token_file. Then:
+#
+#   sudo systemctl enable --now zello-dmr-bridge@west
+#   sudo systemctl enable --now zello-dmr-bridge@east

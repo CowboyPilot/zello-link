@@ -1,0 +1,40 @@
+# ---------------------------------------------------------------------------
+# Secrets and live state -- NEVER commit these.
+# ---------------------------------------------------------------------------
+# Real credentials. The tracked template is examples/bridge.env.example.
+*.env
+!*.env.example
+
+# Zello refresh tokens are live credentials in their own right.
+*.refresh
+
+# Local bench configs: they carry a callsign, channel, and device paths.
+bridge-local.*
+*-local.yaml
+*-local.env
+
+# ---------------------------------------------------------------------------
+# Build and runtime artefacts
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+*.log
+*.bak
+
+# ---------------------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

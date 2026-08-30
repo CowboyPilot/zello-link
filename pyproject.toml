@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zello-dmr-bridge"
+version = "0.1.0"
+description = "Headless bridge between a Zello Friends & Family channel and a DMR radio via an AIOC USB interface"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Core dependencies only. Anything that needs a native audio/HID stack is an
+# extra so that --validate, unit tests, and CI can run on a bare host.
+dependencies = [
+    "pydantic>=2.6,<3.0",
+    "PyYAML>=6.0,<7.0",
+    "websockets>=12.0,<14.0",
+    "numpy>=1.24,<3.0",
+]
+
+[project.optional-dependencies]
+# Hardware I/O. Required on a real bridge host, not for config validation.
+audio = ["sounddevice>=0.4.6,<0.6.0"]
+serial = ["pyserial>=3.5,<4.0"]
+hid = ["hidapi>=0.14.0,<0.15.0"]
+hardware = [
+    "sounddevice>=0.4.6,<0.6.0",
+    "pyserial>=3.5,<4.0",
+    "hidapi>=0.14.0,<0.15.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+zello-dmr-bridge = "zello_dmr_bridge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["zello_dmr_bridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:zello_dmr_bridge.*"]
+
+# libopus is a system library, not a wheel. Install with:
+#   Debian/RPi OS:  sudo apt install libopus0 libportaudio2
+#   macOS:          brew install opus portaudio

@@ -1,0 +1,48 @@
+[Unit]
+Description=Zello DMR Bridge - %i
+Documentation=file:/opt/zello-dmr/README.md
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/opt/zello-dmr/.venv/bin/zello-dmr-bridge --config /etc/zello-dmr/%i.yaml --validate
+ExecStart=/opt/zello-dmr/.venv/bin/zello-dmr-bridge --config /etc/zello-dmr/%i.yaml
+
+# Secrets come from an environment file, not the unit or the config literal.
+# chmod 600, owned by root:zellobridge.
+EnvironmentFile=-/etc/zello-dmr/%i.env
+
+Restart=always
+RestartSec=3
+
+User=zellobridge
+Group=zellobridge
+# Only the groups actually needed for audio, serial, and HID access.
+SupplementaryGroups=audio dialout plugdev
+
+# SIGTERM triggers the ordered shutdown: stop streams, stop audio, unkey PTT,
+# close hardware. Give it room to finish rather than being SIGKILLed mid-unkey.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# Hardening. The bridge needs no privileges beyond its device groups.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+# The only paths it writes.
+ReadWritePaths=/var/log/zello-dmr /var/lib/zello-dmr
+StateDirectory=zello-dmr
+LogsDirectory=zello-dmr
+
+[Install]
+WantedBy=multi-user.target
