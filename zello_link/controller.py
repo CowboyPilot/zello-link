@@ -50,6 +50,16 @@ _START_BUFFER_BLOCKS = 25
 #: playback into a keyed transmitter.
 _JITTER_PACKETS = 3
 
+#: Server refusals that mean "you are going too fast", not "you are broken".
+#: Retrying these immediately makes things worse; they trigger a cooldown.
+#: "woodpecker" is Zello's term for rapid repeated short transmissions.
+_RATE_LIMIT_MARKERS = ("woodpecker", "rate limit", "too many", "flood", "throttl")
+
+
+def _is_rate_limited(error: object) -> bool:
+    text = str(error).lower()
+    return any(m in text for m in _RATE_LIMIT_MARKERS)
+
 
 @dataclass(frozen=True)
 class StreamMeta:
@@ -87,6 +97,9 @@ class BridgeStats:
     rejected_no_direction: int = 0
     rejected_guard: int = 0
     rejected_not_ready: int = 0
+    rejected_too_soon: int = 0
+    rejected_cooldown: int = 0
+    rate_limit_refusals: int = 0
     ptt_timeouts: int = 0
     faults: int = 0
     concealed_frames: int = 0
@@ -126,6 +139,13 @@ class BridgeController:
         self._lock = asyncio.Lock()
         self._guard_until = 0.0
         self._direction_started = 0.0
+
+        # Outbound stream pacing. Zello refuses a client that opens streams
+        # too rapidly ("woodpecker prohibited"), so the bridge paces itself
+        # and backs off hard when told to.
+        self._last_stream_start = 0.0
+        self._cooldown_until = 0.0
+        self._cooldown_s = 0.0
 
         # Zello -> RF
         self._inbound: StreamDecoder | None = None
@@ -448,6 +468,27 @@ class BridgeController:
                 self.stats.rejected_guard += 1
                 return
 
+            now = self._clock()
+
+            if now < self._cooldown_until:
+                self.stats.rejected_cooldown += 1
+                if self.stats.rejected_cooldown == 1:
+                    self.log.warning(
+                        "server rate-limited us; holding off outbound streams for %.0fs",
+                        self._cooldown_until - now,
+                    )
+                return
+
+            gap_ms = (now - self._last_stream_start) * 1000.0
+            if self._last_stream_start and gap_ms < self.cfg.bridge.min_stream_interval_ms:
+                self.stats.rejected_too_soon += 1
+                self.log.debug(
+                    "outbound stream suppressed: only %.0f ms since the last one "
+                    "(min_stream_interval_ms=%d)",
+                    gap_ms, self.cfg.bridge.min_stream_interval_ms,
+                )
+                return
+
             # Don't enter the transmit state for a channel that cannot accept
             # audio: the stream would be rejected and the RF audio discarded
             # anyway, and churning through START/HANG on every COS event
@@ -478,15 +519,23 @@ class BridgeController:
         )
         duration = self.cfg.opus.frame_ms * self.cfg.opus.frames_per_packet
 
+        self._last_stream_start = self._clock()
+
         try:
             stream_id = await self.zello.start_stream(header, duration)
         except Exception as e:
-            self.log.error("start_stream failed: %s", e)
+            if _is_rate_limited(e):
+                self._enter_cooldown(e)
+            else:
+                self.log.error("start_stream failed: %s", e)
             async with self._lock:
                 self._set_state(State.RF_TO_ZELLO_HANG)
                 self._set_state(State.IDLE)
                 self._start_buffer.clear()
             return
+
+        # A stream the server accepted clears the penalty.
+        self._cooldown_s = 0.0
 
         async with self._lock:
             if self._state is not State.RF_TO_ZELLO_START:
@@ -583,6 +632,28 @@ class BridgeController:
             self._arm_guard(self.cfg.bridge.tx_guard_ms)
             if self._state is State.RF_TO_ZELLO_HANG:
                 self._set_state(State.IDLE)
+
+    def _enter_cooldown(self, error: object) -> None:
+        """Back off after the server refuses us for going too fast.
+
+        Doubles on each consecutive refusal. Retrying immediately is what
+        provokes the block in the first place, and probably prolongs it.
+        """
+        self.stats.rate_limit_refusals += 1
+        first = self.cfg.bridge.rate_limit_cooldown_s
+        self._cooldown_s = min(
+            first if self._cooldown_s <= 0 else self._cooldown_s * 2,
+            self.cfg.bridge.rate_limit_cooldown_max_s,
+        )
+        self._cooldown_until = self._clock() + self._cooldown_s
+        self.stats.rejected_cooldown = 0        # re-arm the one-shot warning
+
+        self.log.error(
+            "server refused the stream as rate-limited (%s); backing off %.0fs. "
+            "This usually means COS is chattering -- check cos.threshold_dbfs "
+            "and cos.min_tx_ms.",
+            error, self._cooldown_s,
+        )
 
     # -- faults -----------------------------------------------------------
     async def on_zello_disconnected(self) -> None:

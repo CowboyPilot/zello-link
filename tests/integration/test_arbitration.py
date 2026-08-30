@@ -26,7 +26,7 @@ CONFIG = {
     "sound": {"input_device": "fake-in", "output_device": "fake-out"},
     "ptt": {"mode": "none", "pre_key_ms": 10, "post_audio_ms": 10, "max_tx_s": 5.0},
     "cos": {"mode": "internal_audio"},
-    "bridge": {"rx_guard_ms": 0, "tx_guard_ms": 0},
+    "bridge": {"rx_guard_ms": 0, "tx_guard_ms": 0, "min_stream_interval_ms": 0},
 }
 
 
@@ -360,3 +360,155 @@ class _StubDecoder:
 
     def close(self):
         pass
+
+
+class TestOutboundPacing:
+    """Zello refuses a client that opens streams too fast.
+
+    Observed live: "start_stream rejected: woodpecker prohibited" after COS
+    chattered. Without pacing the bridge retries on every COS event and keeps
+    hammering a server that is already refusing it.
+    """
+
+    async def _rig(self, tmp_path, **bridge):
+        cfg = make_config(tmp_path, bridge=bridge)
+        zello, audio, cos = FakeZello(), FakeAudioSink(), FakeCos()
+        ptt = SafePtt(NullPtt(), max_tx_s=5.0)
+        ctrl = BridgeController(cfg, zello=zello, audio=audio, ptt=ptt, cos=cos)
+        await ctrl.start()
+        ctrl._encoder = FakeEncoder()
+        return ctrl, zello, cos
+
+    async def _one_stream(self, ctrl, cos):
+        cos.trigger_active()
+        await ctrl.on_capture_block(block())
+        cos.trigger_inactive()
+        await ctrl.on_capture_block(block())
+
+    async def test_rapid_streams_are_suppressed(self, tmp_path):
+        ctrl, zello, cos = await self._rig(tmp_path, min_stream_interval_ms=1000)
+        try:
+            for _ in range(5):
+                await self._one_stream(ctrl, cos)
+            assert len(zello.started) == 1, "pacing did not suppress the repeats"
+            assert ctrl.stats.rejected_too_soon >= 1
+        finally:
+            await ctrl.stop()
+
+    async def test_zero_interval_disables_pacing(self, tmp_path):
+        ctrl, zello, cos = await self._rig(tmp_path, min_stream_interval_ms=0)
+        try:
+            for _ in range(4):
+                await self._one_stream(ctrl, cos)
+            assert len(zello.started) == 4
+        finally:
+            await ctrl.stop()
+
+    async def test_first_stream_is_never_delayed(self, tmp_path):
+        """Pacing must not add latency to the first transmission."""
+        ctrl, zello, cos = await self._rig(tmp_path, min_stream_interval_ms=5000)
+        try:
+            await self._one_stream(ctrl, cos)
+            assert len(zello.started) == 1
+        finally:
+            await ctrl.stop()
+
+
+class TestRateLimitBackoff:
+    async def _rig(self, tmp_path, **bridge):
+        bridge.setdefault("min_stream_interval_ms", 0)
+        cfg = make_config(tmp_path, bridge=bridge)
+        zello, audio, cos = FakeZello(), FakeAudioSink(), FakeCos()
+        ptt = SafePtt(NullPtt(), max_tx_s=5.0)
+        ctrl = BridgeController(cfg, zello=zello, audio=audio, ptt=ptt, cos=cos)
+        await ctrl.start()
+        ctrl._encoder = FakeEncoder()
+        return ctrl, zello, cos
+
+    async def _attempt(self, ctrl, cos):
+        cos.trigger_active()
+        await ctrl.on_capture_block(block())
+        cos.trigger_inactive()
+        await ctrl.on_capture_block(block())
+
+    async def test_woodpecker_refusal_triggers_a_cooldown(self, tmp_path):
+        ctrl, zello, cos = await self._rig(tmp_path, rate_limit_cooldown_s=30.0)
+        try:
+            zello.fail_start = True
+            zello.start_error = "start_stream rejected: woodpecker prohibited"
+            await self._attempt(ctrl, cos)
+            assert ctrl.stats.rate_limit_refusals == 1
+            assert ctrl._cooldown_until > ctrl._clock()
+        finally:
+            await ctrl.stop()
+
+    async def test_cooldown_suppresses_further_attempts(self, tmp_path):
+        ctrl, zello, cos = await self._rig(tmp_path, rate_limit_cooldown_s=30.0)
+        try:
+            zello.fail_start = True
+            zello.start_error = "woodpecker prohibited"
+            await self._attempt(ctrl, cos)
+
+            zello.fail_start = False          # server would accept now
+            for _ in range(3):
+                await self._attempt(ctrl, cos)
+            assert not zello.started, "kept hammering while rate-limited"
+            assert ctrl.stats.rejected_cooldown >= 1
+        finally:
+            await ctrl.stop()
+
+    async def test_cooldown_doubles_on_repeat_refusals(self, tmp_path):
+        ctrl, zello, cos = await self._rig(
+            tmp_path, rate_limit_cooldown_s=10.0, rate_limit_cooldown_max_s=100.0
+        )
+        try:
+            zello.fail_start = True
+            zello.start_error = "woodpecker prohibited"
+            await self._attempt(ctrl, cos)
+            first = ctrl._cooldown_s
+            ctrl._cooldown_until = 0.0        # let another attempt through
+            await self._attempt(ctrl, cos)
+            assert ctrl._cooldown_s == first * 2
+        finally:
+            await ctrl.stop()
+
+    async def test_cooldown_is_capped(self, tmp_path):
+        ctrl, zello, cos = await self._rig(
+            tmp_path, rate_limit_cooldown_s=10.0, rate_limit_cooldown_max_s=25.0
+        )
+        try:
+            zello.fail_start = True
+            zello.start_error = "woodpecker prohibited"
+            for _ in range(6):
+                ctrl._cooldown_until = 0.0
+                await self._attempt(ctrl, cos)
+            assert ctrl._cooldown_s <= 25.0
+        finally:
+            await ctrl.stop()
+
+    async def test_a_successful_stream_clears_the_penalty(self, tmp_path):
+        ctrl, zello, cos = await self._rig(tmp_path, rate_limit_cooldown_s=10.0)
+        try:
+            zello.fail_start = True
+            zello.start_error = "woodpecker prohibited"
+            await self._attempt(ctrl, cos)
+            assert ctrl._cooldown_s > 0
+
+            zello.fail_start = False
+            ctrl._cooldown_until = 0.0
+            await self._attempt(ctrl, cos)
+            assert ctrl._cooldown_s == 0.0
+        finally:
+            await ctrl.stop()
+
+    async def test_ordinary_errors_do_not_trigger_a_cooldown(self, tmp_path):
+        """A transient network failure should retry, not back off for minutes."""
+        ctrl, zello, cos = await self._rig(tmp_path)
+        try:
+            zello.fail_start = True
+            zello.start_error = "connection reset"
+            await self._attempt(ctrl, cos)
+            assert ctrl.stats.rate_limit_refusals == 0
+            assert ctrl._cooldown_until == 0.0
+        finally:
+            await ctrl.stop()

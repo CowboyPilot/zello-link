@@ -43,6 +43,7 @@ class FakeZello:
 
         self.start_delay_s = start_delay_s
         self.fail_start = False
+        self.start_error = "simulated start_stream failure"
         self.fail_stop = False
         self.fail_send = False
 
@@ -52,7 +53,7 @@ class FakeZello:
         if self.start_delay_s:
             await asyncio.sleep(self.start_delay_s)
         if self.fail_start:
-            raise ConnectionError("simulated start_stream failure")
+            raise ConnectionError(self.start_error)
         self.started.append((codec_header, packet_duration_ms))
         self._next_stream_id += 1
         return self._next_stream_id

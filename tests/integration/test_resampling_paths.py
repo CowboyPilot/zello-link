@@ -27,7 +27,7 @@ BASE = {
     "sound": {"input_device": "in", "output_device": "out"},
     "ptt": {"mode": "none", "pre_key_ms": 0, "post_audio_ms": 0, "max_tx_s": 5.0},
     "cos": {"mode": "internal_audio"},
-    "bridge": {"rx_guard_ms": 0, "tx_guard_ms": 0},
+    "bridge": {"rx_guard_ms": 0, "tx_guard_ms": 0, "min_stream_interval_ms": 0},
     "logging": {"console": False, "file": None},
 }
 

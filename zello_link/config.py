@@ -329,6 +329,20 @@ class BridgeConfigSection(_Model):
     # configured pre-key + jitter + block budget exceeds it.
     latency_budget_ms: int = Field(default=300, ge=50, le=5000)
 
+    # Minimum gap between consecutive outbound Zello streams.
+    #
+    # Zello's servers reject a client that opens streams too rapidly, with
+    # "woodpecker prohibited" -- observed live when COS chattered. Without a
+    # floor here the bridge retries on every COS event and keeps hammering a
+    # server that is already refusing it. On a half-duplex net, legitimate
+    # traffic almost never needs to open two streams inside a second.
+    min_stream_interval_ms: int = Field(default=1000, ge=0, le=30000)
+
+    # Cooldown after the server explicitly refuses for rate-limit reasons.
+    # Doubles on each consecutive refusal, up to the max.
+    rate_limit_cooldown_s: float = Field(default=15.0, ge=1, le=600)
+    rate_limit_cooldown_max_s: float = Field(default=300.0, ge=1, le=3600)
+
     @model_validator(mode="after")
     def _at_least_one_direction(self) -> "BridgeConfigSection":
         if not self.rf_to_zello and not self.zello_to_rf:
@@ -416,6 +430,10 @@ class BridgeConfig(_Model):
             raise ValueError(
                 "bridge.rf_to_zello is true but cos.mode is 'disabled'; "
                 "RF-to-Zello has no way to detect receive activity"
+            )
+        if self.bridge.rate_limit_cooldown_max_s < self.bridge.rate_limit_cooldown_s:
+            raise ValueError(
+                "bridge.rate_limit_cooldown_max_s must be >= rate_limit_cooldown_s"
             )
         if self.cos.min_tx_ms and self.cos.min_tx_ms <= self.cos.hang_ms:
             raise ValueError(
