@@ -30,6 +30,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from .audio.levels import CosEvent, apply_gain_db
+from .backends.base import BackendEvents
 from .audio.resample import Resampler
 from .logging_setup import bind
 from .state import Direction, State, direction_of, is_legal
@@ -240,6 +241,19 @@ class BridgeController:
             self.ptt.open()
         if self.cos is not None:
             self.cos.open()
+
+        # Wire the radio side's receive path. A backend that detects
+        # transmissions itself (USRP: ASL signals key/unkey in the protocol)
+        # drives these; the AIOC backend leaves them unused because its
+        # receive path runs through capture blocks and COS instead.
+        self.backend.set_events(
+            BackendEvents(
+                on_rx_key=self._on_backend_rx_key,
+                on_rx_audio=self._on_backend_rx_audio,
+                on_rx_unkey=self._on_backend_rx_unkey,
+                on_fault=self._on_backend_fault,
+            )
+        )
         await self.backend.start()
 
         if self.cfg.bridge.rf_to_zello:
@@ -454,6 +468,33 @@ class BridgeController:
                 self._set_state(State.IDLE)
             self._suppress_rx(False)
 
+    # -- backend -> Zello (backends that signal their own key/unkey) ------
+    async def _on_backend_rx_key(self) -> None:
+        """The radio side began transmitting toward us.
+
+        No level is passed: USRP carries the key state in the protocol, so
+        there is nothing to threshold and no COS tuning applies.
+        """
+        await self._open_rf_to_zello(None)
+
+    async def _on_backend_rx_audio(self, pcm: np.ndarray) -> None:
+        """One block of receive audio at the backend's own sample rate.
+
+        No gain is applied: there is no sound card in this path, and ASL has
+        its own level controls. Mirrors the tail of ``on_capture_block``.
+        """
+        if self._state is State.RF_TO_ZELLO_START:
+            # Hold audio arriving while the server round trip completes.
+            self._start_buffer.append(pcm)
+        elif self._state is State.RF_TO_ZELLO_ACTIVE:
+            await self._send_block(pcm)
+
+    async def _on_backend_rx_unkey(self) -> None:
+        await self._close_rf_to_zello()
+
+    def _on_backend_fault(self, reason: str) -> None:
+        self.fail_safe(reason)
+
     # -- RF -> Zello ------------------------------------------------------
     async def on_capture_block(self, pcm: np.ndarray) -> None:
         """Handle one capture block: measure, detect COS, encode if streaming."""
@@ -573,10 +614,17 @@ class BridgeController:
             self._outbound_id = stream_id
             self._set_state(State.RF_TO_ZELLO_ACTIVE)
 
-        self.log.info(
-            "RF->ZELLO start cos=%s level_dbfs=%.1f stream=%d",
-            self.cos.name, stats.rms_dbfs, stream_id,
-        )
+        if stats is not None and self.cos is not None:
+            self.log.info(
+                "RF->ZELLO start cos=%s level_dbfs=%.1f stream=%d",
+                self.cos.name, stats.rms_dbfs, stream_id,
+            )
+        else:
+            # A backend that signals key/unkey itself has no COS detector and
+            # no level to report: ASL already decided this is a transmission.
+            self.log.info(
+                "RF->ZELLO start src=%s stream=%d", self.backend.name, stream_id
+            )
 
         # Flush what was captured during the round trip so the first syllable
         # is not lost.

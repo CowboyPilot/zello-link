@@ -53,6 +53,17 @@ class UsrpBackend(RadioBackend):
         self._tx_buf = np.zeros(0, dtype=np.int16)
         self._keyed = False
 
+        # Loopback suppression state. chan_usrp sends our own audio back --
+        # the node repeats what we give it -- so inbound frames have to be
+        # ignored while we are the one talking.
+        self._suppressed = False
+        self._rx_active = False
+
+        # Strong references to in-flight dispatch tasks. Without this the
+        # loop only holds a weak reference and a task can be collected
+        # mid-flight, dropping received audio silently.
+        self._pending: set[asyncio.Task[None]] = set()
+
     # -- lifecycle --------------------------------------------------------
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -112,22 +123,54 @@ class UsrpBackend(RadioBackend):
     # coroutine, so each hands off to the loop rather than blocking it.
     def _dispatch(self, coro: Any) -> None:
         if self._loop is None:
+            coro.close()          # never awaited; close it rather than warn
             return
-        self._loop.create_task(coro)
+        task = self._loop.create_task(coro)
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
 
     def _rx_key(self) -> None:
+        if self._suppressed:
+            return
+        self._rx_active = True
         if self.events.on_rx_key:
             self._dispatch(self.events.on_rx_key())
 
     def _rx_audio(self, payload: bytes) -> None:
-        if not self.events.on_rx_audio:
+        if self._suppressed or not self.events.on_rx_audio:
             return
         pcm = np.frombuffer(payload, dtype="<i2")
         self._dispatch(self.events.on_rx_audio(pcm))
 
     def _rx_unkey(self) -> None:
+        self._rx_active = False
+        if self._suppressed:
+            return
         if self.events.on_rx_unkey:
             self._dispatch(self.events.on_rx_unkey())
+
+    # -- loopback suppression ---------------------------------------------
+    def suppress_rx(self, on: bool) -> None:
+        """Ignore inbound audio while we are transmitting toward ASL.
+
+        The node repeats what we send it: measured on a live ASL3 node at
+        duplex=3, a 201-packet transmission came back as 203 packets. Without
+        this, every Zello->RF over would immediately re-open an RF->Zello
+        stream carrying our own audio straight back to the channel.
+
+        This is the USRP equivalent of muting COS on a radio backend, and the
+        controller drives it through the same ``suppress_rx`` hook.
+        """
+        if on == self._suppressed:
+            return
+        self._suppressed = on
+        if on and self._rx_active:
+            # A transmission was already in progress when we took the
+            # channel. Close it, or the core would sit in RF_TO_ZELLO
+            # forever: the matching unkey is about to be suppressed.
+            self._rx_active = False
+            if self.events.on_rx_unkey:
+                self._dispatch(self.events.on_rx_unkey())
 
     # -- safety -----------------------------------------------------------
     def fail_safe(self) -> None:
