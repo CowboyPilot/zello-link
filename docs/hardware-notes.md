@@ -10,8 +10,9 @@ this file records what the hardware did.
 |---|---|
 | Serial PTT (DTR) — AIOC | **verified** on macOS and Linux |
 | Serial PTT (RTS) — Digirig Mobile | implemented, **no hardware tested** |
-| CM108 HID PTT (GPIO 3 output report) | **verified on Linux** — Digirig Lite |
+| CM108 HID PTT (GPIO 3 output report) | **verified** — AIOC *and* Digirig Lite |
 | Digirig Lite (C-Media `0d8c:0012`) | **verified** — auto-detected, keys correctly |
+| AIOC CM108 HID PTT | **verified** with the corrected byte offsets |
 | CM108 HID COS (`aioc_virtual` / `aioc_hardware`) | **does not work on the AIOC** — see below |
 | Audio-level COS (`internal_audio`) | **verified**, and what the bench runs |
 | USRP backend | **verified** end to end against ASL3 |
@@ -88,6 +89,9 @@ followed by the four bytes above. Measured on the Digirig Lite:
 ```
 
 So the correct key sequence is `00 00 04 04 00` and unkey is `00 00 00 04 00`.
+
+Both an AIOC and a Digirig Lite key correctly with these bytes, so the layout
+is confirmed across two vendors rather than inferred from one.
 
 ### Why the AIOC appeared to work with the wrong layout
 
