@@ -64,6 +64,14 @@ def render_validation(cfg: Any, *, device_report: list[str] | None = None) -> st
         add(f"ptt tty           {cfg.ptt.tty_device}")
     if cfg.ptt.hid_device:
         add(f"ptt hid           {cfg.ptt.hid_device}")
+    # Which line or pin actually keys the radio: the setting most likely to
+    # be wrong on a new interface, and silent when it is.
+    if cfg.ptt.mode == "serial":
+        idle = "RTS" if cfg.ptt.serial_signal == "dtr" else "DTR"
+        add(f"ptt keying        {cfg.ptt.serial_signal.upper()} asserts "
+            f"({idle} held low)")
+    elif cfg.ptt.mode == "cm108_hid":
+        add(f"ptt keying        CM108 GPIO {cfg.ptt.gpio_pin}")
     add(f"ptt timing        pre-key {cfg.ptt.pre_key_ms} ms, "
         f"post-audio {cfg.ptt.post_audio_ms} ms, max TX {cfg.ptt.max_tx_s:.0f} s")
     add("")

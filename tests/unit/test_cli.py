@@ -435,3 +435,41 @@ class TestRunWrapper:
 
     def test_passes_arguments_through(self):
         assert '"$@"' in self._script()
+
+class TestValidateReportsKeying:
+    """Which line keys the radio is the setting most likely to be wrong on a
+    new interface, and it fails silently when it is -- the radio simply never
+    transmits. It belongs in --validate output."""
+
+    def _text(self, tmp_path, **ptt):
+        import yaml
+
+        from zello_link.config import load_config
+        from zello_link.diagnostics.status import render_validation
+
+        data = {
+            "config_version": 2,
+            "instance": {"name": "v"},
+            "zello": {"channel": "C", "username": "u", "auth_token": "tok-abcdef"},
+            "sound": {"input_device": "in", "output_device": "out"},
+            "ptt": {"mode": "serial", "tty_device": "/dev/ttyACM0", **ptt},
+            "logging": {"console": False, "file": None},
+        }
+        p = tmp_path / "b.yaml"
+        p.write_text(yaml.safe_dump(data))
+        return render_validation(load_config(p))
+
+    def test_dtr_is_reported(self, tmp_path):
+        t = self._text(tmp_path)
+        assert "DTR asserts" in t and "RTS held low" in t
+
+    def test_rts_is_reported(self, tmp_path):
+        t = self._text(tmp_path, serial_signal="rts")
+        assert "RTS asserts" in t and "DTR held low" in t
+
+    def test_gpio_pin_is_reported(self, tmp_path):
+        t = self._text(
+            tmp_path, mode="cm108_hid", hid_device="/dev/hidraw0",
+            tty_device=None, gpio_pin=4,
+        )
+        assert "CM108 GPIO 4" in t
