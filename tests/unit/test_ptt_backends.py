@@ -313,3 +313,49 @@ class TestSilentHidIsReported:
         cos, _ = self._cos(monkeypatch, [])
         cos.poll()
         assert cos.reads == 0
+
+
+class TestDeviceNodeGuard:
+    """A /dev path that is not a character device must be refused.
+
+    From a real incident: the AIOC dropped off the USB bus mid-test (RF
+    ingress browning out the port), taking /dev/hidraw0 with it. A later
+    write to that path CREATED a regular file and reported success, having
+    touched no hardware. A stale regular file at a /dev path also stops udev
+    recreating the real node when the device comes back.
+    """
+
+    def test_missing_path_is_refused_with_a_useful_message(self, tmp_path):
+        from zello_link.hardware.aioc_hid import _check_device_node
+
+        with pytest.raises(PttError, match="does not exist"):
+            _check_device_node(str(tmp_path / "hidraw-gone"))
+
+    def test_regular_file_is_refused(self, tmp_path):
+        from zello_link.hardware.aioc_hid import _check_device_node
+
+        f = tmp_path / "hidraw0"
+        f.write_bytes(b"\x00\x00\x00\x04")     # exactly what the bad write left
+        with pytest.raises(PttError, match="not a character device"):
+            _check_device_node(str(f))
+
+    def test_message_says_how_to_recover(self, tmp_path):
+        from zello_link.hardware.aioc_hid import _check_device_node
+
+        f = tmp_path / "hidraw0"
+        f.write_bytes(b"x")
+        with pytest.raises(PttError, match="remove it and replug"):
+            _check_device_node(str(f))
+
+    def test_libusb_style_paths_are_not_filesystem_checked(self):
+        """hidapi's libusb backend reports bus ids like "1-1:1.3"."""
+        from zello_link.hardware.aioc_hid import _check_device_node
+
+        _check_device_node("1-1:1.3")          # must not raise
+        _check_device_node(b"1-1:1.3")
+        _check_device_node("DevSrvsID:4295374066")
+
+    def test_a_real_character_device_passes(self):
+        from zello_link.hardware.aioc_hid import _check_device_node
+
+        _check_device_node("/dev/null")        # char device on every unix

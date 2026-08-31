@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import logging
 import platform
+import stat
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .ptt import PttBackend, PttError
@@ -141,6 +143,35 @@ def find_aioc_hid_path(*, vid: int = AIOC_VID, pid: int = AIOC_PID) -> list[str]
         raise PttError(f"cannot enumerate HID devices: {e}") from e
 
 
+def _check_device_node(path: Any) -> None:
+    """Refuse a filesystem path that is not a character device.
+
+    Only checks paths that look like filesystem paths: hidapi's libusb
+    backend reports bus-style ids such as "1-1:1.3", which are not files.
+
+    This exists because of a real incident. The AIOC dropped off the USB bus
+    mid-test (RF ingress browning out the port), taking /dev/hidraw0 with it.
+    A later write to that path CREATED a regular file there and reported
+    success, having touched no hardware at all -- and a stale regular file at
+    a /dev path also stops udev recreating the real node when the device
+    returns. Failing loudly beats silently writing into the void.
+    """
+    if not isinstance(path, str) or not path.startswith("/"):
+        return
+    p = Path(path)
+    if not p.exists():
+        raise PttError(
+            f"{path} does not exist. The interface may have been unplugged or "
+            "dropped off the USB bus; check `dmesg` and replug it."
+        )
+    if not stat.S_ISCHR(p.stat().st_mode):
+        raise PttError(
+            f"{path} exists but is not a character device. Something has "
+            "replaced the device node with a regular file; remove it and "
+            "replug the interface so udev can recreate it."
+        )
+
+
 class _HidDevice:
     """Shared open/close for the HID-backed PTT and COS backends."""
 
@@ -166,6 +197,8 @@ class _HidDevice:
                 )
             path = found[0]
             log.info("auto-selected AIOC HID device path=%s", path)
+
+        _check_device_node(path)
 
         try:
             dev = hid.device()
