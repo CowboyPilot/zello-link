@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .jitter import JitterBuffer
 from .protocol import (
     UsrpPacket,
     UsrpProtocolError,
@@ -53,6 +54,13 @@ class UsrpStats:
     duplicates: int = 0
     forced_unkeys: int = 0
     last_rx_monotonic: float = 0.0
+
+    # Reorder buffer. Named apart from the controller's concealed_frames /
+    # late_packets_dropped, which count the Zello->RF Opus path -- conflating
+    # the two directions would make both useless for diagnosis.
+    rx_concealed_frames: int = 0
+    rx_late_dropped: int = 0
+    rx_jitter_overflows: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -97,6 +105,9 @@ class UsrpTransport:
         asl_port: int,
         strict_source: bool = True,
         rx_unkey_timeout_ms: int = 500,
+        jitter_buffer_ms: int = 60,
+        max_jitter_buffer_ms: int = 200,
+        packet_loss_fill: str = "silence",
         events: UsrpEvents | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -110,6 +121,11 @@ class UsrpTransport:
         self._clock = clock
 
         self.stats = UsrpStats()
+        self._jitter = JitterBuffer(
+            target_ms=jitter_buffer_ms,
+            max_ms=max_jitter_buffer_ms,
+            fill=packet_loss_fill,
+        )
         self._transport: Any = None
         self._tx_seq = 0
         self._rx_expected: int | None = None
@@ -274,15 +290,31 @@ class UsrpTransport:
         # A huge jump is a restarted peer, not loss; resync quietly.
         self._rx_expected = (packet.seq + 1) & 0xFFFFFFFF
 
+    def _start_rx(self) -> None:
+        self._rx_keyed = True
+        # Fresh ordering state per transmission: sequence numbers from the
+        # previous over say nothing about this one.
+        self._jitter.reset()
+        log.info("usrp->zello key")
+        if self.events.on_key:
+            self.events.on_key()
+
+    def _emit(self, frames: list[bytes]) -> None:
+        self.stats.rx_concealed_frames = self._jitter.concealed
+        self.stats.rx_late_dropped = self._jitter.late_dropped
+        self.stats.rx_jitter_overflows = self._jitter.overflows
+        if not self.events.on_audio:
+            return
+        for frame in frames:
+            self.events.on_audio(frame)
+
     def _deliver_voice(self, packet: UsrpPacket) -> None:
         if packet.keyed and not self._rx_keyed:
-            self._rx_keyed = True
-            log.info("usrp->zello key")
-            if self.events.on_key:
-                self.events.on_key()
+            self._start_rx()
 
-        if self.events.on_audio:
-            self.events.on_audio(packet.payload)
+        # Through the reorder buffer rather than straight out: UDP can hand
+        # us frames out of order, and encoding them that way garbles speech.
+        self._emit(self._jitter.push(packet.seq, packet.payload))
 
         if not packet.keyed and self._rx_keyed:
             # A voice frame marked unkeyed ends the transmission.
@@ -290,14 +322,14 @@ class UsrpTransport:
 
     def _deliver_signal(self, packet: UsrpPacket) -> None:
         if packet.keyed and not self._rx_keyed:
-            self._rx_keyed = True
-            log.info("usrp->zello key")
-            if self.events.on_key:
-                self.events.on_key()
+            self._start_rx()
         elif not packet.keyed and self._rx_keyed:
             self._end_rx("explicit unkey")
 
     def _end_rx(self, reason: str) -> None:
+        # Release what the buffer still holds before closing the stream, or
+        # the last few frames of every over would be dropped.
+        self._emit(self._jitter.flush())
         self._rx_keyed = False
         log.info("usrp->zello unkey (%s)", reason)
         if self.events.on_unkey:

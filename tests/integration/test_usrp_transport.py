@@ -34,7 +34,14 @@ class Recorder:
 
 
 async def pair(**kw):
-    """A sender and a receiver pointed at each other on loopback."""
+    """A sender and a receiver pointed at each other on loopback.
+
+    The reorder window defaults OFF here: these tests are about the
+    transport's own semantics, and a window would hold frames until flush.
+    JitterBuffer has its own tests, and test_usrp_jitter.py covers the two
+    working together.
+    """
+    kw.setdefault("jitter_buffer_ms", 0)
     a_port, b_port = ports()
     rec = Recorder()
     rx = UsrpTransport(
@@ -195,7 +202,7 @@ class TestSourceFiltering:
         rx = UsrpTransport(
             bind_host="127.0.0.1", bind_port=b_port,
             asl_host="10.255.255.1", asl_port=a_port,
-            events=rec.events(), strict_source=False,
+            events=rec.events(), strict_source=False, jitter_buffer_ms=0,
         )
         await rx.start()
         intruder = UsrpTransport(
@@ -279,12 +286,13 @@ class TestSequenceTracking:
         finally:
             await tx.stop(); await rx.stop()
 
-    async def test_gap_is_counted(self):
+    async def _gap_rig(self, **kw):
         a_port, b_port = ports()
         rec = Recorder()
+        kw.setdefault("jitter_buffer_ms", 0)
         rx = UsrpTransport(
             bind_host="127.0.0.1", bind_port=b_port,
-            asl_host="127.0.0.1", asl_port=a_port, events=rec.events(),
+            asl_host="127.0.0.1", asl_port=a_port, events=rec.events(), **kw,
         )
         await rx.start()
         sender = UsrpTransport(
@@ -292,13 +300,36 @@ class TestSequenceTracking:
             asl_host="127.0.0.1", asl_port=b_port,
         )
         await sender.start()
+        return sender, rx, rec
+
+    async def test_gap_is_counted_and_concealed(self):
+        """Lost frames are replaced, not skipped.
+
+        Skipping them shortens the audio, which is audible as a click and a
+        clipped syllable; substituting silence keeps the words either side
+        where they belong.
+        """
+        sender, rx, rec = await self._gap_rig()
         try:
             sender._sendto(pack_voice(1, SILENCE))
             await settle(0.05)
             sender._sendto(pack_voice(5, SILENCE))     # 2,3,4 lost
             await settle()
             assert rx.stats.sequence_gaps == 1
-            assert len(rec.frames) == 2, "audio must still be delivered"
+            assert rx.stats.rx_concealed_frames == 3
+            assert len(rec.frames) == 5, "gap must be filled, not skipped"
+        finally:
+            await sender.stop(); await rx.stop()
+
+    async def test_gap_can_be_dropped_instead(self):
+        sender, rx, rec = await self._gap_rig(packet_loss_fill="drop")
+        try:
+            sender._sendto(pack_voice(1, SILENCE))
+            await settle(0.05)
+            sender._sendto(pack_voice(5, SILENCE))
+            await settle()
+            assert rx.stats.rx_concealed_frames == 3
+            assert len(rec.frames) == 2, "drop must not substitute audio"
         finally:
             await sender.stop(); await rx.stop()
 

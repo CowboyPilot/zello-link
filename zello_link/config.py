@@ -410,9 +410,13 @@ class UsrpConfig(_Model):
     # UDP can drop the explicit unkey; without this the Zello stream would
     # stay open indefinitely.
     rx_unkey_timeout_ms: int = Field(default=500, ge=50, le=10000)
-    inactivity_timeout_ms: int = Field(default=3000, ge=0, le=60000)
 
-    sequence_start: int = Field(default=0, ge=0, le=0xFFFFFFFF)
+    # There is deliberately no inactivity timeout. chan_usrp sends nothing
+    # while the node is idle -- measured on a live ASL3 node, "usrp show"
+    # Write stays at 0 at rest -- so silence is the normal state and a
+    # timeout on it would fire constantly on a healthy link. The same
+    # mistake once disconnected healthy Zello sessions; see
+    # zello.keepalive_timeout_s for that story.
 
     # USRP carries no authentication or encryption whatsoever, so the source
     # check is the only thing standing between the bridge and anyone who can

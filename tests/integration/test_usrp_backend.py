@@ -59,18 +59,24 @@ class Peer:
 
 
 async def rig(tmp_path, **overrides):
+    """Backend on one socket, a stand-in chan_usrp on the other.
+
+    Both ends run with the reorder window off. These tests assert on frames
+    the moment they are written, and a window legitimately holds frames back
+    until flush -- which would make every assertion here about the buffer
+    rather than the backend. JitterBuffer has its own tests.
+    """
     ours, theirs = ports()
-    cfg = make_config(
-        tmp_path,
-        usrp={"bind_host": "127.0.0.1", "bind_port": ours,
-              "asl_host": "127.0.0.1", "asl_port": theirs},
-        **overrides,
-    )
+    usrp = {"bind_host": "127.0.0.1", "bind_port": ours,
+            "asl_host": "127.0.0.1", "asl_port": theirs,
+            "jitter_buffer_ms": 0}
+    usrp.update(overrides.pop("usrp", {}))
+    cfg = make_config(tmp_path, usrp=usrp, **overrides)
     peer = Peer()
     peer_tx = UsrpTransport(
         bind_host="127.0.0.1", bind_port=theirs,
         asl_host="127.0.0.1", asl_port=ours,
-        events=peer.events(),
+        events=peer.events(), jitter_buffer_ms=0,
     )
     await peer_tx.start()
     backend = create_backend(cfg)

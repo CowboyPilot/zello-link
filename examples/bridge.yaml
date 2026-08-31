@@ -233,7 +233,6 @@ usrp:
 
   tx_hang_ms: 0                # optional tail after a Zello stream ends
   rx_unkey_timeout_ms: 500     # forced unkey if the explicit one is lost
-  inactivity_timeout_ms: 3000
 
   # USRP has NO authentication or encryption. strict_source drops datagrams
   # from anywhere but asl_host, and a non-loopback bind_host is refused
@@ -243,8 +242,20 @@ usrp:
   strict_source: true
   allow_remote_host: false
 
-  jitter_buffer_ms: 60         # UDP jitter; loopback needs almost none
+  # Reorder window for inbound audio, NOT a playout buffer: frames are
+  # released as soon as ordering allows, so in-order arrival costs nothing.
+  # jitter_buffer_ms is how long to wait before declaring a missing sequence
+  # number lost -- 60 ms is two frames of slack for a routed path.
+  #
+  # Set 0 when the bridge runs on the ASL host over loopback, which is the
+  # recommended deployment: datagrams cannot be reordered there, so any wait
+  # is pure added latency.
+  jitter_buffer_ms: 60
   max_jitter_buffer_ms: 200
+
+  # What to do with a frame that never arrives. "silence" substitutes a
+  # silent frame so the words either side stay where they belong; "drop"
+  # shortens the audio instead, which is audible as a click.
   packet_loss_fill: "silence"  # silence | drop
 
 logging:

@@ -45,6 +45,9 @@ class UsrpBackend(RadioBackend):
             asl_port=cfg.usrp.asl_port,
             strict_source=cfg.usrp.strict_source,
             rx_unkey_timeout_ms=cfg.usrp.rx_unkey_timeout_ms,
+            jitter_buffer_ms=cfg.usrp.jitter_buffer_ms,
+            max_jitter_buffer_ms=cfg.usrp.max_jitter_buffer_ms,
+            packet_loss_fill=cfg.usrp.packet_loss_fill,
         )
 
         # chan_usrp wants exactly 160 samples per datagram. Whatever block
