@@ -300,11 +300,18 @@ async def _run_bridge(cfg: Any, *, status: StatusLine | None = None) -> int:
     loop = asyncio.get_running_loop()
     shutdown = asyncio.Event()
 
-    # A device fault is handed to the supervisor, which fails safe and
-    # retries. Setting shutdown here would exit on a recoverable USB glitch.
-    engine = AudioEngine(cfg)
-    cos = create_cos_backend(cfg)
-    ptt = SafePtt(create_ptt_backend(cfg), max_tx_s=cfg.ptt.max_tx_s)
+    # The USRP backend has no sound card, no PTT line and no COS, so none of
+    # that hardware is constructed for it -- a USRP host need not even have
+    # PortAudio installed.
+    usrp_mode = cfg.bridge.backend == "usrp"
+
+    engine = cos = ptt = None
+    if not usrp_mode:
+        # A device fault is handed to the supervisor, which fails safe and
+        # retries. Setting shutdown here would exit on a recoverable USB glitch.
+        engine = AudioEngine(cfg)
+        cos = create_cos_backend(cfg)
+        ptt = SafePtt(create_ptt_backend(cfg), max_tx_s=cfg.ptt.max_tx_s)
 
     controller: BridgeController | None = None
     client: ZelloClient | None = None
@@ -319,7 +326,19 @@ async def _run_bridge(cfg: Any, *, status: StatusLine | None = None) -> int:
 
     try:
         client = ZelloClient(cfg)
-        controller = BridgeController(cfg, zello=client, audio=engine, ptt=ptt, cos=cos)
+
+        if usrp_mode:
+            from .backends.usrp import UsrpBackend
+
+            radio = UsrpBackend(cfg)
+        else:
+            from .backends.aioc import AiocBackend
+
+            radio = AiocBackend(cfg, engine=engine, ptt=ptt, cos=cos)
+
+        controller = BridgeController(
+            cfg, zello=client, audio=engine, ptt=ptt, cos=cos, backend=radio
+        )
 
         # Wire the client's callbacks to the controller now that both exist.
         client.set_handlers(
@@ -328,9 +347,10 @@ async def _run_bridge(cfg: Any, *, status: StatusLine | None = None) -> int:
             on_stream_stop=controller.on_zello_stream_stop,
             on_disconnected=controller.on_zello_disconnected,
         )
-        ptt.set_timeout_callback(controller.on_ptt_timeout)
-
-        engine.open()
+        if ptt is not None:
+            ptt.set_timeout_callback(controller.on_ptt_timeout)
+        if engine is not None:
+            engine.open()
         await controller.start()
 
         metrics = MetricsReporter(
@@ -338,14 +358,19 @@ async def _run_bridge(cfg: Any, *, status: StatusLine | None = None) -> int:
         )
         metrics.start()
 
-        supervisor = HardwareSupervisor(
-            cfg, engine=engine, ptt=ptt, controller=controller
-        )
-        metrics.supervisor = supervisor
+        # The hardware supervisor watches a USB device; USRP has none, so
+        # its failure mode is the socket, handled by the transport itself.
+        supervisor = None
+        if not usrp_mode:
+            supervisor = HardwareSupervisor(
+                cfg, engine=engine, ptt=ptt, controller=controller
+            )
+            metrics.supervisor = supervisor
 
         tasks = [
             asyncio.create_task(client.run(), name="zello"),
-            asyncio.create_task(supervisor.run(shutdown), name="hardware"),
+            *([asyncio.create_task(supervisor.run(shutdown), name="hardware")]
+              if supervisor is not None else []),
             asyncio.create_task(shutdown.wait(), name="shutdown"),
         ]
         if status is not None:
@@ -373,7 +398,12 @@ async def _run_bridge(cfg: Any, *, status: StatusLine | None = None) -> int:
 
         await metrics.stop()
 
-    except Exception:
+    except Exception as e:
+        from .usrp.transport import UsrpBindError
+
+        if isinstance(e, UsrpBindError):
+            log.critical("%s", e)
+            return EXIT_DEVICE
         log.critical("fatal error", exc_info=True)
         return EXIT_RUNTIME
 
@@ -385,9 +415,11 @@ async def _run_bridge(cfg: Any, *, status: StatusLine | None = None) -> int:
         if client is not None:
             with contextlib.suppress(Exception):
                 await client.stop()
-        with contextlib.suppress(Exception):
-            engine.close()
-        ptt.close()
+        if engine is not None:
+            with contextlib.suppress(Exception):
+                engine.close()
+        if ptt is not None:
+            ptt.close()
         if status is not None:
             status.finish()
         log.info("shutdown complete")

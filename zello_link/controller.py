@@ -120,9 +120,10 @@ class BridgeController:
         cfg: Any,
         *,
         zello: ZelloTransport,
-        audio: AudioSink,
-        ptt: Any,
-        cos: Any,
+        audio: AudioSink | None = None,
+        ptt: Any = None,
+        cos: Any = None,
+        backend: Any = None,
         clock: Any = time.monotonic,
     ) -> None:
         self.cfg = cfg
@@ -130,6 +131,16 @@ class BridgeController:
         self.audio = audio
         self.ptt = ptt
         self.cos = cos
+
+        # Everything reaching the radio side goes through the backend, so the
+        # controller never learns whether that is a transmitter or an
+        # AllStarLink node. When one is not supplied the AIOC pieces are
+        # wrapped, which keeps the existing call sites and tests working.
+        if backend is None:
+            from .backends.aioc import AiocBackend
+
+            backend = AiocBackend(cfg, engine=audio, ptt=ptt, cos=cos)
+        self.backend = backend
         self._clock = clock
 
         self.log = bind("controller", instance=cfg.instance.name)
@@ -204,6 +215,19 @@ class BridgeController:
                 await asyncio.wait_for(asyncio.shield(task), timeout)
         return self._state is State.IDLE
 
+    def _suppress_rx(self, on: bool) -> Any:
+        """Stop our own transmit audio from opening a Zello stream.
+
+        Only meaningful where the radio side can hear itself; the backend
+        decides, since a USRP peer has no such path.
+        """
+        fn = getattr(self.backend, "suppress_rx", None)
+        if fn is not None:
+            return fn(on)
+        if self.cos is not None:
+            return self.cos.suppress(on)
+        return None
+
     def _guard_active(self) -> bool:
         return self._clock() < self._guard_until
 
@@ -212,8 +236,12 @@ class BridgeController:
 
     # -- lifecycle --------------------------------------------------------
     async def start(self) -> None:
-        self.ptt.open()
-        self.cos.open()
+        if self.ptt is not None:
+            self.ptt.open()
+        if self.cos is not None:
+            self.cos.open()
+        await self.backend.start()
+
         if self.cfg.bridge.rf_to_zello:
             self._encoder = OpusEncoder(
                 self.cfg.opus.sample_rate,
@@ -221,8 +249,11 @@ class BridgeController:
                 bitrate=self.cfg.opus.bitrate,
                 complexity=self.cfg.opus.complexity,
             )
+            # Convert between the backend's own rate and the Opus rate. Only
+            # the backend knows what its far side needs: chan_usrp is fixed
+            # at 8 kHz, a sound card is whatever was configured.
             self._outbound_resampler = Resampler(
-                self.cfg.sound.sample_rate, self.cfg.opus.sample_rate
+                self.backend.sample_rate, self.cfg.opus.sample_rate
             )
             if not self._outbound_resampler.passthrough:
                 self.log.info("RF->ZELLO resampling %s", self._outbound_resampler)
@@ -244,9 +275,13 @@ class BridgeController:
         self.fail_safe("shutdown")
 
         with contextlib.suppress(Exception):
-            self.cos.close()
-        with contextlib.suppress(Exception):
-            self.ptt.close()
+            await self.backend.stop()
+        if self.cos is not None:
+            with contextlib.suppress(Exception):
+                self.cos.close()
+        if self.ptt is not None:
+            with contextlib.suppress(Exception):
+                self.ptt.close()
         if self._encoder is not None:
             with contextlib.suppress(Exception):
                 self._encoder.close()
@@ -260,11 +295,7 @@ class BridgeController:
         self.log.error("FAILSAFE reason=%s state=%s", reason, self._state.value)
 
         with contextlib.suppress(Exception):
-            self.ptt.fail_safe()
-        with contextlib.suppress(Exception):
-            self.audio.flush()
-        with contextlib.suppress(Exception):
-            self.cos.suppress(False)
+            self.backend.fail_safe()
 
         self._inbound_id = None
         self._outbound_id = None
@@ -311,7 +342,7 @@ class BridgeController:
             # device and Opus rates match. Without it a peer at 8 kHz would
             # play at the wrong pitch and speed into a keyed transmitter.
             self._inbound_resampler = Resampler(
-                meta.codec_header.sample_rate, self.cfg.sound.sample_rate
+                meta.codec_header.sample_rate, self.backend.sample_rate
             )
 
             # Size the jitter buffer in PACKETS, not milliseconds. The peer
@@ -323,14 +354,14 @@ class BridgeController:
             setter = getattr(self.audio, "set_jitter_target_ms", None)
             if setter is not None and packet_ms > 0:
                 setter(max(self.cfg.sound.jitter_ms, packet_ms * _JITTER_PACKETS))
-            self.cos.suppress(True)
+            self._suppress_rx(True)
             self._direction_started = self._clock()
 
             try:
-                await self.ptt.key()
+                await self.backend.key()
             except Exception as e:
-                self.log.error("PTT key failed: %s", e)
-                self.fail_safe("ptt_key_failed")
+                self.log.error("backend key failed: %s", e)
+                self.fail_safe("backend_key_failed")
                 return False
 
         self.log.info(
@@ -339,9 +370,9 @@ class BridgeController:
             meta.codec_header.sample_rate, meta.codec_header.frame_size_ms,
         )
 
-        # Give the radio time to reach full transmit before audio is released.
-        await asyncio.sleep(self.cfg.ptt.pre_key_ms / 1000.0)
-
+        # backend.key() has already waited out whatever the far side needs
+        # before audio is safe to release -- a transmitter's attack time for
+        # a radio, nothing at all for chan_usrp.
         async with self._lock:
             if self._state is State.ZELLO_TO_RF_PREKEY:
                 self._set_state(State.ZELLO_TO_RF_ACTIVE)
@@ -370,7 +401,7 @@ class BridgeController:
             out, clipped = apply_gain_db(pcm, self.cfg.sound.tx_gain_db)
             if clipped:
                 self.stats.clipped_tx_samples += clipped
-            self.audio.play(out)
+            await self.backend.write_audio(out)
 
     async def on_zello_stream_stop(self, stream_id: int) -> None:
         """Drain playback, honour the post-audio delay, then unkey."""
@@ -385,14 +416,10 @@ class BridgeController:
 
     async def _finish_zello_to_rf(self) -> None:
         try:
-            # Let queued audio actually reach the radio before unkeying,
-            # bounded so a stuck device cannot hold the transmitter.
-            pending = min(self.audio.drain_pending_s(), self.cfg.sound.jitter_max_ms / 1000.0)
-            if pending > 0:
-                await asyncio.sleep(pending)
-
-            await asyncio.sleep(self.cfg.ptt.post_audio_ms / 1000.0)
-            await self.ptt.unkey()
+            # The backend owns the tail: draining the sound card and the
+            # post-audio delay for a radio, an explicit unkey packet for
+            # chan_usrp.
+            await self.backend.unkey()
 
             elapsed_ms = (self._clock() - self._direction_started) * 1000.0
             self.stats.zello_to_rf_calls += 1
@@ -403,7 +430,7 @@ class BridgeController:
             self.log.info("ZELLO->RF stop duration_ms=%d", int(elapsed_ms))
 
         except asyncio.CancelledError:
-            self.ptt.fail_safe()
+            self.backend.fail_safe()
             raise
         except Exception:
             self.log.exception("error finishing ZELLO->RF")
@@ -425,7 +452,7 @@ class BridgeController:
             self._arm_guard(self.cfg.bridge.rx_guard_ms)
             if self._state is State.ZELLO_TO_RF_TAIL:
                 self._set_state(State.IDLE)
-            self.cos.suppress(False)
+            self._suppress_rx(False)
 
     # -- RF -> Zello ------------------------------------------------------
     async def on_capture_block(self, pcm: np.ndarray) -> None:

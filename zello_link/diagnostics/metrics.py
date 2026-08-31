@@ -26,6 +26,13 @@ def collect(*, controller: Any, audio: Any = None, zello: Any = None, ptt: Any =
     snap: dict[str, Any] = {"state": controller.state.value}
     snap.update(controller.stats.as_dict())
 
+    # The radio side reports its own counters, whatever it is: USB device
+    # errors for a sound card, packet/sequence stats for chan_usrp.
+    radio = getattr(controller, "backend", None)
+    if radio is not None and hasattr(radio, "stats"):
+        with contextlib.suppress(Exception):
+            snap.update(radio.stats())
+
     if audio is not None and hasattr(audio, "stats"):
         snap.update(audio.stats())
         with contextlib.suppress(Exception):

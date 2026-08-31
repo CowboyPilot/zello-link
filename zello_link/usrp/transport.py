@@ -24,7 +24,11 @@ from .protocol import (
     unpack,
 )
 
-__all__ = ["UsrpTransport", "UsrpStats", "UsrpEvents"]
+__all__ = ["UsrpTransport", "UsrpStats", "UsrpEvents", "UsrpBindError"]
+
+
+class UsrpBindError(OSError):
+    """The local UDP socket could not be opened."""
 
 log = logging.getLogger(__name__)
 
@@ -118,10 +122,22 @@ class UsrpTransport:
     # -- lifecycle --------------------------------------------------------
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
-        await loop.create_datagram_endpoint(
-            lambda: _Protocol(self),
-            local_addr=(self.bind_host, self.bind_port),
-        )
+        try:
+            await loop.create_datagram_endpoint(
+                lambda: _Protocol(self),
+                local_addr=(self.bind_host, self.bind_port),
+            )
+        except OSError as e:
+            # A stack trace here says nothing useful. The causes are few and
+            # each has an obvious fix.
+            raise UsrpBindError(
+                f"cannot bind UDP {self.bind_host}:{self.bind_port}: {e}\n"
+                "  - already in use? another bridge instance, or a leftover "
+                "`python -m zello_link.usrp.probe`\n"
+                "  - cannot assign requested address? usrp.bind_host must be an "
+                "address on THIS host\n"
+                "  - permission denied? ports below 1024 need privileges"
+            ) from e
         self._watchdog = asyncio.create_task(self._watch_rx(), name="usrp-rx-watchdog")
         log.info(
             "usrp bound %s:%d -> ASL %s:%d",
