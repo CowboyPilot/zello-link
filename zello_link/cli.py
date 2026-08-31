@@ -166,6 +166,68 @@ def _validate(cfg: Any) -> int:
     return EXIT_OK
 
 
+async def _probe_hid_input(cfg: Any, *, seconds: float = 3.0) -> list[str]:
+    """Check that CM108 input reports actually reach us.
+
+    Reading them is not universally permitted. On macOS the AIOC enumerates
+    as a Consumer Control device (usage page 0x0c), which the system gates
+    behind Privacy & Security > Input Monitoring; writing output reports for
+    PTT is unrestricted, so PTT works while COS stays silent forever.
+    """
+    import platform
+
+    out: list[str] = []
+    try:
+        from .hardware.aioc_hid import HidCos
+    except Exception as e:                                  # pragma: no cover
+        return [f"HID COS unavailable: {e}"]
+
+    cos = HidCos(cfg.cos.hid_device, button=cfg.cos.hid_button)
+    try:
+        cos.open()
+    except Exception as e:
+        return [f"cannot open HID COS device: {e}"]
+
+    out.append(f"COS over HID: watching button {cfg.cos.hid_button} "
+               f"for {seconds:.0f}s -- open the radio's squelch now")
+    seen_any = False
+    states: set[bool] = set()
+    loop = asyncio.get_running_loop()
+    end = loop.time() + seconds
+    while loop.time() < end:
+        try:
+            state = cos.poll()
+        except Exception as e:
+            out.append(f"  HID read failed: {e}")
+            break
+        if cos.reads:
+            seen_any = True
+            states.add(state)
+        await asyncio.sleep(0.02)
+    cos.close()
+
+    if not seen_any:
+        out.append("  NO input reports received.")
+        if platform.system() == "Darwin":
+            out.append("  On macOS the AIOC is a Consumer Control HID device, which")
+            out.append("  needs Privacy & Security > Input Monitoring for your")
+            out.append("  terminal. PTT still works without it; only COS is blocked.")
+            out.append("  If that does not help, use cos.mode='internal_audio' here")
+            out.append("  and verify HID COS on a Linux host.")
+        else:
+            out.append("  Check that VCOS is enabled and mapped to a CM108 button in")
+            out.append("  the AIOC's configuration, and that the button number matches")
+            out.append(f"  cos.hid_button ({cfg.cos.hid_button}).")
+    elif len(states) < 2:
+        out.append(f"  input reports arriving, but COS never changed "
+                   f"(stuck {'closed' if False in states else 'open'}).")
+        out.append(f"  Check VCOS is mapped to button {cfg.cos.hid_button} "
+                   f"and its level threshold is low enough to trip.")
+    else:
+        out.append("  OK: COS both asserted and released.")
+    return out
+
+
 async def _diagnose_aioc(cfg: Any, *, ptt_test: bool) -> int:
     """Report AIOC state. PTT is forced OFF before anything else happens."""
     from .hardware.ptt import PttError, SafePtt, create_ptt_backend
@@ -194,6 +256,14 @@ async def _diagnose_aioc(cfg: Any, *, ptt_test: bool) -> int:
         print(f"AIOC HID devices: {paths if paths else 'none found'}")
     except Exception as e:
         print(f"AIOC HID enumeration unavailable: {e}")
+
+    # COS over HID either works or fails silently: poll() keeps returning the
+    # last known state, so a bridge that can never hear the radio looks
+    # perfectly healthy. Prove input reports actually arrive.
+    if cfg.cos.mode in ("aioc_virtual", "aioc_hardware"):
+        print()
+        for line in await _probe_hid_input(cfg):
+            print(line)
 
     try:
         if ptt_test:

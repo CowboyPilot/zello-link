@@ -243,3 +243,73 @@ class TestHidCosWiring:
         p = tmp_path / "b.yaml"
         p.write_text(yaml.safe_dump(data))
         assert load_config(p).cos.hid_button == 3
+
+
+class TestSilentHidIsReported:
+    """No input reports must not look like "COS is simply never active".
+
+    poll() returns the last known state when nothing is pending, so a device
+    that never sends input reports leaves the bridge permanently deaf while
+    every health check passes. macOS does exactly this: the AIOC is a
+    Consumer Control device and input is gated behind Input Monitoring, while
+    the PTT output reports it writes are unrestricted.
+    """
+
+    def _cos(self, monkeypatch, reports):
+        from zello_link.hardware import aioc_hid
+        from zello_link.hardware.aioc_hid import HidCos
+
+        class Dev:
+            def __init__(self):
+                self.queue = list(reports)
+
+            def read(self, *a, **kw):
+                return self.queue.pop(0) if self.queue else []
+
+            def close(self):
+                pass
+
+        cos = HidCos(None, button=2)
+        cos._dev = Dev()
+        cos._opened_at = 1000.0
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(aioc_hid.time, "monotonic", lambda: clock["t"])
+        return cos, clock
+
+    def test_warns_once_when_nothing_ever_arrives(self, monkeypatch, caplog):
+        import logging
+
+        cos, clock = self._cos(monkeypatch, [])
+        with caplog.at_level(logging.WARNING, logger="zello_link.hardware.aioc_hid"):
+            cos.poll()
+            clock["t"] += 30.0
+            cos.poll()
+            cos.poll()
+        warns = [r for r in caplog.records if "no HID input reports" in r.message]
+        assert len(warns) == 1, "must warn, and must not repeat every block"
+        assert "cannot hear the radio" in warns[0].message
+
+    def test_does_not_warn_before_the_grace_period(self, monkeypatch, caplog):
+        import logging
+
+        cos, clock = self._cos(monkeypatch, [])
+        with caplog.at_level(logging.WARNING, logger="zello_link.hardware.aioc_hid"):
+            clock["t"] += 1.0
+            cos.poll()
+        assert not [r for r in caplog.records if "no HID input reports" in r.message]
+
+    def test_does_not_warn_when_reports_arrive(self, monkeypatch, caplog):
+        import logging
+
+        cos, clock = self._cos(monkeypatch, [[0x02, 0, 0, 0]])
+        with caplog.at_level(logging.WARNING, logger="zello_link.hardware.aioc_hid"):
+            assert cos.poll() is True
+            clock["t"] += 30.0
+            cos.poll()
+        assert not [r for r in caplog.records if "no HID input reports" in r.message]
+        assert cos.reads == 1
+
+    def test_reads_counter_exposes_the_condition(self, monkeypatch):
+        cos, _ = self._cos(monkeypatch, [])
+        cos.poll()
+        assert cos.reads == 0

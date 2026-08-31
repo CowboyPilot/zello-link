@@ -23,6 +23,8 @@ Verify on the bench with ``--diagnose-aioc``, and only then ``--ptt-test``.
 from __future__ import annotations
 
 import logging
+import platform
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,6 +35,9 @@ __all__ = ["AIOC_VID", "AIOC_PID", "Cm108Report", "Cm108HidPtt", "HidCos", "find
 log = logging.getLogger(__name__)
 
 #: AIOC USB identifiers, from the project README (dfu-util -d 1209:7388).
+#: How long to wait before concluding that input reports are never coming.
+_SILENT_HID_WARN_S = 10.0
+
 AIOC_VID = 0x1209
 AIOC_PID = 0x7388
 
@@ -266,10 +271,14 @@ class HidCos(_HidDevice):
         self._state = False
         self._reads = 0
         self._read_errors = 0
+        self._opened_at = 0.0
+        self._warned_silent = False
 
     def open(self) -> None:
         self._dev = self._open_device()
         self._state = False
+        self._opened_at = time.monotonic()
+        self._warned_silent = False
         log.info("COS HID opened button=%d", self.button)
 
     def poll(self) -> bool:
@@ -285,7 +294,41 @@ class HidCos(_HidDevice):
         if data:
             self._reads += 1
             self._state = self.report.read_button(bytes(data), button=self.button)
+        else:
+            self._warn_if_silent()
         return self._state
+
+    def _warn_if_silent(self) -> None:
+        """Say so when no input report has EVER arrived.
+
+        Otherwise this fails invisibly: poll() keeps returning the last known
+        state, so a bridge that can never hear the radio looks healthy and
+        simply never opens a stream. Reading these reports is not universally
+        permitted -- on macOS the AIOC is a Consumer Control device and the
+        system gates input behind Input Monitoring, while PTT output reports
+        are unrestricted.
+        """
+        if self._reads or self._warned_silent or not self._opened_at:
+            return
+        if time.monotonic() - self._opened_at < _SILENT_HID_WARN_S:
+            return
+        self._warned_silent = True
+        extra = (
+            " On macOS grant your terminal Privacy & Security > Input "
+            "Monitoring, or use cos.mode='internal_audio'."
+            if platform.system() == "Darwin" else
+            " Check VCOS is enabled and mapped to a CM108 button, and that the"
+            " button matches cos.hid_button."
+        )
+        log.warning(
+            "no HID input reports in %.0fs: COS will never trigger and the "
+            "bridge cannot hear the radio.%s", _SILENT_HID_WARN_S, extra,
+        )
+
+    @property
+    def reads(self) -> int:
+        """Input reports received since open. Zero means COS cannot work."""
+        return self._reads
 
     @property
     def state(self) -> bool:
