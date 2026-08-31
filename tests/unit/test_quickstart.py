@@ -8,7 +8,6 @@ command printed on the front page is the one that actually exists.
 
 from __future__ import annotations
 
-import os
 import re
 import stat
 import subprocess
