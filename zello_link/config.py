@@ -315,6 +315,13 @@ class CosConfig(_Model):
     # AIOC-programmed values. Used only when configuring the device; the
     # AIOC's own COS indication stays authoritative at runtime, so no second
     # software hang is applied on top of these.
+    # Which CM108 button the AIOC maps VCOS onto, for cos.mode='aioc_virtual'
+    # and 'aioc_hardware'. COS arrives as a button press in byte 0 of the HID
+    # input report, not as a GPIO level, and the mapping is set in the AIOC's
+    # own "CM108 Button Sources" panel -- it cannot be discovered, so it has
+    # to be told to us. 2 (VOL DOWN) matches the AIOC's usual VCOS routing.
+    hid_button: int = Field(default=2, ge=1, le=4)
+
     configure_aioc_on_start: bool = False
     aioc_threshold: int | None = None
     aioc_hang_ms: int = Field(default=450, ge=0, le=5000)

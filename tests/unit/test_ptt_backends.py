@@ -174,3 +174,72 @@ class TestCm108GpioPin:
     def test_use_before_open_is_refused(self):
         with pytest.raises(PttError, match="before open"):
             Cm108HidPtt(None).key()
+
+
+class TestCm108InputReport:
+    """COS arrives as a BUTTON press, not a GPIO level.
+
+    The AIOC maps VCOS onto one of the four CM108 buttons in its own "CM108
+    Button Sources" panel, and the interrupt-IN report carries those four
+    states in byte 0. An earlier implementation read byte 2 -- the OUTPUT
+    report's GPIO data byte -- and treated the bit as a 1-8 GPIO pin. Both
+    wrong, both silent: the bridge simply never heard the radio.
+    """
+
+    @pytest.mark.parametrize("button,bit", [(1, 0x01), (2, 0x02), (3, 0x04), (4, 0x08)])
+    def test_each_button_maps_to_its_bit_in_byte_zero(self, button, bit):
+        r = Cm108Report()
+        assert r.read_button(bytes([bit, 0, 0, 0]), button=button) is True
+        assert r.read_button(bytes([0, 0, 0, 0]), button=button) is False
+
+    def test_other_buttons_do_not_register(self):
+        """VCOS on button 2 must not be tripped by button 1 or 3."""
+        r = Cm108Report()
+        report = bytes([0x01 | 0x04, 0, 0, 0])
+        assert r.read_button(report, button=2) is False
+
+    def test_byte_two_is_not_consulted(self):
+        """Regression: byte 2 is the output report's GPIO byte, not input."""
+        r = Cm108Report()
+        assert r.read_button(bytes([0x00, 0, 0xFF, 0]), button=2) is False
+
+    def test_button_out_of_range_is_refused(self):
+        with pytest.raises(ValueError, match="1-4"):
+            Cm108Report().read_button(bytes([0, 0, 0, 0]), button=5)
+
+    def test_short_report_is_refused(self):
+        with pytest.raises(PttError, match="input report"):
+            Cm108Report().read_button(b"", button=2)
+
+
+class TestHidCosWiring:
+    def test_button_defaults_to_two(self):
+        """The AIOC's usual VCOS routing is VOL DOWN."""
+        from zello_link.hardware.aioc_hid import HidCos
+
+        assert HidCos(None).button == 2
+
+    def test_button_is_configurable(self):
+        from zello_link.hardware.aioc_hid import HidCos
+
+        assert HidCos(None, button=3).button == 3
+
+    def test_config_reaches_the_backend(self, tmp_path):
+        """hid_button was unreachable from YAML, like cos_pin before it."""
+        import yaml
+
+        from zello_link.config import load_config
+
+        data = {
+            "config_version": 2,
+            "instance": {"name": "c"},
+            "zello": {"channel": "C", "username": "u", "auth_token": "tok-abcdef"},
+            "sound": {"input_device": "in", "output_device": "out"},
+            "ptt": {"mode": "none"},
+            "cos": {"mode": "aioc_virtual", "hid_device": "/dev/hidraw0",
+                    "hid_button": 3},
+            "logging": {"console": False, "file": None},
+        }
+        p = tmp_path / "b.yaml"
+        p.write_text(yaml.safe_dump(data))
+        assert load_config(p).cos.hid_button == 3

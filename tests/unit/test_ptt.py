@@ -228,12 +228,12 @@ class TestCm108Report:
 
     def test_reads_cos_bit(self):
         r = Cm108Report()
-        assert r.read_cos(bytes([0, 0, 0b1000, 0]), cos_pin=4) is True
-        assert r.read_cos(bytes([0, 0, 0b0000, 0]), cos_pin=4) is False
+        assert r.read_button(bytes([0b1000, 0, 0, 0]), button=4) is True
+        assert r.read_button(bytes([0b0000, 0, 0, 0]), button=4) is False
 
     def test_cos_ignores_other_pins(self):
         r = Cm108Report()
-        assert r.read_cos(bytes([0, 0, 0b0111, 0]), cos_pin=4) is False
+        assert r.read_button(bytes([0b0111, 0, 0, 0]), button=4) is False
 
     def test_rejects_bad_pin(self):
         with pytest.raises(ValueError, match="gpio_pin"):
@@ -260,7 +260,7 @@ class TestCm108Report:
 
     def test_truncated_input_report_raises(self):
         with pytest.raises(PttError, match="input report"):
-            Cm108Report().read_cos(b"\x00", cos_pin=4)
+            Cm108Report().read_button(b"", button=2)
 
 
 class TestBackendContract:

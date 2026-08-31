@@ -131,7 +131,9 @@ class AiocCos(CosBackend):
         if self._hid is None:
             from .aioc_hid import HidCos
 
-            self._hid = HidCos(self._cfg.cos.hid_device)
+            self._hid = HidCos(
+                self._cfg.cos.hid_device, button=self._cfg.cos.hid_button
+            )
         self._hid.open()
 
         if self._cfg.cos.configure_aioc_on_start:

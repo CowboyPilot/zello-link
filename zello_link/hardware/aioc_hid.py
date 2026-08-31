@@ -57,6 +57,14 @@ class Cm108Report:
     mask_index: int = 3
     length: int = 4
 
+    #: Input reports are NOT the output layout. The CM108 interrupt-IN report
+    #: carries the four button states in byte 0, one bit each:
+    #:   bit 0 VOL UP, bit 1 VOL DOWN, bit 2 PLAYBACK MUTE, bit 3 RECORD MUTE
+    #: The AIOC signals COS by mapping VCOS onto one of those buttons in its
+    #: "CM108 Button Sources" configuration, so COS arrives as a button press
+    #: and not as a GPIO level.
+    button_index: int = 0
+
     def __post_init__(self) -> None:
         if not 1 <= self.gpio_pin <= 8:
             raise ValueError(f"gpio_pin must be 1-8, got {self.gpio_pin}")
@@ -85,15 +93,22 @@ class Cm108Report:
         buf[self.mask_index] = self.bit
         return bytes(buf)
 
-    def read_cos(self, report: bytes, *, cos_pin: int) -> bool:
-        """Extract a COS bit from an HID input report."""
-        if not 1 <= cos_pin <= 8:
-            raise ValueError(f"cos_pin must be 1-8, got {cos_pin}")
-        if len(report) <= self.data_index:
+    def read_button(self, report: bytes, *, button: int) -> bool:
+        """True if the given CM108 button (1-4) is pressed in an input report.
+
+        Replaces an earlier read_cos() that indexed ``data_index`` -- byte 2,
+        the OUTPUT report's GPIO data byte -- against an INPUT report, and
+        treated the bit as a 1-8 GPIO pin. Both were wrong, and both failed
+        silently: the bridge simply never heard the radio.
+        """
+        if not 1 <= button <= 4:
+            raise ValueError(f"button must be 1-4, got {button}")
+        if len(report) <= self.button_index:
             raise PttError(
-                f"HID input report is {len(report)} bytes; expected more than {self.data_index}"
+                f"HID input report is {len(report)} bytes; expected more than "
+                f"{self.button_index}"
             )
-        return bool(report[self.data_index] & (1 << (cos_pin - 1)))
+        return bool(report[self.button_index] & (1 << (button - 1)))
 
 
 def _import_hid() -> Any:
@@ -240,11 +255,13 @@ class HidCos(_HidDevice):
         self,
         device: str | None,
         *,
-        cos_pin: int = 4,
+        button: int = 2,
         report: Cm108Report | None = None,
     ) -> None:
         super().__init__(device)
-        self.cos_pin = cos_pin
+        #: Which CM108 button the AIOC maps VCOS onto. Must match its
+        #: "CM108 Button Sources" panel; there is no way to discover it.
+        self.button = button
         self.report = report or Cm108Report()
         self._state = False
         self._reads = 0
@@ -253,7 +270,7 @@ class HidCos(_HidDevice):
     def open(self) -> None:
         self._dev = self._open_device()
         self._state = False
-        log.info("COS HID opened pin=%d", self.cos_pin)
+        log.info("COS HID opened button=%d", self.button)
 
     def poll(self) -> bool:
         """Sample COS. Returns the last known state if no report is pending."""
@@ -267,7 +284,7 @@ class HidCos(_HidDevice):
 
         if data:
             self._reads += 1
-            self._state = self.report.read_cos(bytes(data), cos_pin=self.cos_pin)
+            self._state = self.report.read_button(bytes(data), button=self.button)
         return self._state
 
     @property
