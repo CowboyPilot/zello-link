@@ -34,7 +34,44 @@ Zello channel  <--TLS WebSocket-->  zello-link  <--UDP/chan_usrp-->  AllStarLink
 - Fails safe: PTT is driven OFF on startup, shutdown, exception, disconnect,
   device failure, SIGTERM, and watchdog timeout.
 
+## Faster Funnier
+
+**One shot install — copy/paste**
+
+```bash
+git clone https://github.com/CowboyPilot/zello-link.git && cd zello-link && ./quickstart.sh
+```
+
+That clones the repo, builds a virtualenv, installs the package with its
+hardware extras, and then offers to run the setup wizard — which asks for your
+Zello channel and account, which interface the radio is on, and which
+directions to carry, and writes:
+
+```
+<name>.yaml     the config
+<name>.env      your credentials, mode 600
+run-<name>.sh   a launcher
+```
+
+Nothing is written until the last question is answered, and the wizard
+validates its own output before telling you it worked. Then start the bridge:
+
+```bash
+./run-<name>.sh
+```
+
+Two deliberate choices. It is a **paste-able command, not `curl | bash`** — you
+can read every line of `quickstart.sh` in this repo before running it, which
+you cannot do with a URL. And it **never sudo's**: `libopus`, PortAudio and
+hidapi are C libraries needing root, so the installer detects what is missing
+and prints the exact command for your platform, leaving the decision to you.
+
+Skip the wizard with `./quickstart.sh --no-wizard`, or add the test tooling
+with `./quickstart.sh --dev`.
+
 ## Install
+
+If you would rather do it in steps, or already have a checkout:
 
 **Linux / macOS:**
 

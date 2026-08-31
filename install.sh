@@ -153,6 +153,17 @@ say "Done"
 cat <<'EOF'
   Next steps:
 
+    The setup wizard does all of the below in one pass -- it asks what you
+    have, then writes the config, a mode-600 credentials file and a launcher:
+
+         .venv/bin/zello-link --setup
+
+    Then start the bridge with the launcher it wrote:
+
+         ./run-<name>.sh
+
+  Or, by hand:
+
     1. Copy the example config and edit it:
          cp examples/bridge.yaml my-bridge.yaml
 
@@ -165,7 +176,8 @@ cat <<'EOF'
     4. Set the receive level, watching the live meter:
          .venv/bin/zello-link --config my-bridge.yaml --cos-monitor
 
-  Secrets belong in the environment, not the config file:
-    export ZELLO_AUTH_TOKEN='...'   # from https://developers.zello.com/
-    export ZELLO_PASSWORD='...'
+    Going that route, secrets belong in the environment rather than the
+    config file (the wizard handles this for you):
+         export ZELLO_AUTH_TOKEN='...'   # from https://developers.zello.com/
+         export ZELLO_PASSWORD='...'
 EOF
