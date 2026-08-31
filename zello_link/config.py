@@ -583,6 +583,19 @@ class BridgeConfig(_Model):
         """Non-fatal advisories, surfaced by --validate and at startup."""
         out: list[str] = []
 
+        if self.cos.mode in ("aioc_virtual", "aioc_hardware"):
+            out.append(
+                f"cos.mode={self.cos.mode!r} has never been seen to work on AIOC "
+                "hardware. The byte layout matches the device's own HID report "
+                "descriptor and HID PTT on the same interface is verified, but no "
+                "input report was ever observed: two units (one on latest "
+                "firmware), macOS and Linux, hidapi and raw /dev/hidraw0, VCOS "
+                "thresholds 256 down to 50, with confirmed squelch activity -- and "
+                "the VCOS registers were then confirmed not to change on the device "
+                "itself. Prefer cos.mode='internal_audio'. See "
+                "docs/hardware-notes.md."
+            )
+
         if self.bridge.backend == "usrp":
             if not self.usrp.strict_source:
                 out.append(
@@ -647,15 +660,6 @@ class BridgeConfig(_Model):
                     "could open the host's built-in microphone or speakers instead of "
                     "the radio. Select by device name."
                 )
-
-        if self.cos.mode in ("aioc_virtual", "aioc_hardware"):
-            out.append(
-                f"cos.mode='{self.cos.mode}' uses the AIOC's CM108-style HID report, "
-                "whose byte layout is not published by the vendor and is NOT yet "
-                "bench-verified in this project. If COS never asserts (or never "
-                "releases), check Cm108Report before suspecting the radio. "
-                "cos.mode='internal_audio' is the proven path."
-            )
 
         if self.cos.mode == "aioc_hardware":
             out.append(

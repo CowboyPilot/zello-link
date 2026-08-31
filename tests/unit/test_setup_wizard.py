@@ -235,7 +235,7 @@ class TestInsertMissingKey:
 
 
 class TestAiocCosWarnings:
-    """Choosing an AIOC COS mode must say that the HID layout is unverified."""
+    """Choosing an AIOC COS mode must say it has never worked on real hardware."""
 
     def _warnings(self, tmp_path, mode):
         import yaml
@@ -254,11 +254,32 @@ class TestAiocCosWarnings:
         p.write_text(yaml.safe_dump(data))
         return load_config(p).warnings()
 
-    def test_virtual_warns_about_the_unverified_layout(self, tmp_path):
-        assert any("not published" in w for w in self._warnings(tmp_path, "aioc_virtual"))
+    def test_virtual_warns_it_has_never_worked(self, tmp_path):
+        ws = self._warnings(tmp_path, "aioc_virtual")
+        assert any("never been seen to work" in w for w in ws)
 
-    def test_hardware_warns_about_the_unverified_layout(self, tmp_path):
-        assert any("not published" in w for w in self._warnings(tmp_path, "aioc_hardware"))
+    def test_hardware_warns_it_has_never_worked(self, tmp_path):
+        ws = self._warnings(tmp_path, "aioc_hardware")
+        assert any("never been seen to work" in w for w in ws)
+
+    def test_warning_points_at_the_working_alternative(self, tmp_path):
+        """A warning that does not say what to do instead is half a warning."""
+        ws = self._warnings(tmp_path, "aioc_virtual")
+        assert any("internal_audio" in w for w in ws)
+
+    def test_warning_does_not_blame_the_byte_layout(self, tmp_path):
+        """Regression: the layout IS verified against the report descriptor.
+
+        Blaming it would send the next person to debug Cm108Report, which is
+        correct, instead of the AIOC's VCOS, which is what actually fails.
+        """
+        ws = self._warnings(tmp_path, "aioc_virtual")
+        assert not any("not published" in w for w in ws)
+        assert any("matches the device" in w for w in ws)
+
+    def test_internal_audio_is_not_warned_about(self, tmp_path):
+        ws = self._warnings(tmp_path, "internal_audio")
+        assert not any("never been seen to work" in w for w in ws)
 
     def test_hardware_also_warns_about_2_pin_connectors(self, tmp_path):
         assert any("2-pin" in w for w in self._warnings(tmp_path, "aioc_hardware"))

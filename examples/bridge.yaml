@@ -108,7 +108,19 @@ ptt:
   max_tx_s: 180                # hard watchdog, enforced independently
 
 cos:
-  mode: "internal_audio"       # internal_audio | aioc_virtual | aioc_hardware | disabled
+  # internal_audio | aioc_virtual | aioc_hardware | disabled
+  #
+  # Use internal_audio with an AIOC. The HID modes below are implemented and
+  # match the device's own HID report descriptor, but no AIOC tested has ever
+  # emitted an input report -- verified on two units (one on latest firmware),
+  # on macOS and Linux, via hidapi and raw /dev/hidraw0, at VCOS thresholds
+  # from 256 down to 50, with confirmed squelch activity. The operator then
+  # confirmed on a separate serial monitor that the VCOS registers never
+  # change state on the device itself. See docs/hardware-notes.md.
+  #
+  # HID PTT (ptt.mode: cm108_hid) is a different interface on the same device
+  # and IS verified working -- only the COS input side is affected.
+  mode: "internal_audio"
   hid_device: null
 
   # internal_audio only. Detector floor is -90.3 dBFS; a threshold below that
