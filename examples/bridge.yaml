@@ -9,7 +9,7 @@
 # Secrets: prefer ${ENV_VAR} indirection over literals. If you do put a
 # literal here, chmod 600 the file and own it as the service user.
 
-config_version: 1
+config_version: 2
 
 instance:
   name: west-bridge
@@ -158,6 +158,17 @@ cos:
   aioc_hang_ms: 450
 
 bridge:
+  # Which radio side this instance drives. One per process -- the backends
+  # are peers, not layers.
+  #
+  #   aioc  a radio over a CM108-class USB interface (audio + PTT + COS)
+  #   usrp  an AllStarLink node over chan_usrp (UDP; no radio on this host)
+  #
+  # The easiest way to set this up is interactively, which also prints the
+  # rpt.conf stanza and modules.conf changes AllStarLink needs:
+  #   zello-link --config this-file.yaml --list-audio-devices
+  backend: "aioc"
+
   rf_to_zello: true
   zello_to_rf: true
 
@@ -199,6 +210,42 @@ hardware:
   retry_initial_s: 1.0
   retry_max_s: 30.0
   max_attempts: 0              # 0 = retry forever; an appliance should
+
+# ---------------------------------------------------------------------------
+# AllStarLink backend (only used when bridge.backend is "usrp")
+# ---------------------------------------------------------------------------
+# The node's rxchannel reads USRP/<bind_host>:<bind_port>:<asl_port> -- i.e.
+# HISIP:HISPORT:MYPORT, where "his" is this bridge and "my" is Asterisk.
+# Sound devices, PTT and COS are all unused in this mode: key state is
+# carried in the protocol, so none of the threshold/hang/min_tx tuning
+# applies.
+usrp:
+  bind_host: "127.0.0.1"       # address AllStarLink sends audio TO
+  bind_port: 34001             # this bridge listens here (HISPORT)
+  asl_host: "127.0.0.1"        # where Asterisk runs
+  asl_port: 32001              # Asterisk listens here (MYPORT)
+
+  # Fixed by chan_usrp: signed-linear, 8 kHz, 160-sample frames. Other
+  # values are rejected rather than quietly resampled into something ASL
+  # would misread.
+  sample_rate: 8000
+  frame_ms: 20
+
+  tx_hang_ms: 0                # optional tail after a Zello stream ends
+  rx_unkey_timeout_ms: 500     # forced unkey if the explicit one is lost
+  inactivity_timeout_ms: 3000
+
+  # USRP has NO authentication or encryption. strict_source drops datagrams
+  # from anywhere but asl_host, and a non-loopback bind_host is refused
+  # unless allow_remote_host is set -- binding somewhere reachable hands PTT
+  # of a radio system to anyone who can reach the port. Set it only when the
+  # path is a VPN or an isolated segment.
+  strict_source: true
+  allow_remote_host: false
+
+  jitter_buffer_ms: 60         # UDP jitter; loopback needs almost none
+  max_jitter_buffer_ms: 200
+  packet_loss_fill: "silence"  # silence | drop
 
 logging:
   console: true

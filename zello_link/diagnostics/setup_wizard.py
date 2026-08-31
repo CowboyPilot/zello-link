@@ -20,7 +20,10 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-__all__ = ["run_device_setup", "set_config_value", "SelectionAborted"]
+__all__ = [
+    "run_device_setup", "set_config_value", "ensure_section",
+    "render_asl_instructions", "SelectionAborted",
+]
 
 
 class SelectionAborted(Exception):
@@ -112,6 +115,21 @@ def _section_indent(lines: Sequence[str], section: str) -> str:
         elif in_section:
             return m.group("indent")
     return "  "
+
+
+def ensure_section(text: str, section: str) -> str:
+    """Append an empty ``section:`` header if the file has none.
+
+    Needed because a config written for the AIOC backend has no ``usrp:``
+    block at all, and set_config_value can only insert into a section that
+    already exists.
+    """
+    for line in text.splitlines():
+        m = _KEY_RE.match(line)
+        if m and not m.group("indent") and m.group("key") == section:
+            return text
+    sep = "" if text.endswith("\n") else "\n"
+    return f"{text}{sep}\n{section}:\n"
 
 
 def _comment_start(rest: str) -> int | None:
@@ -264,8 +282,237 @@ def _prompt_hid_device(current: Any) -> str:
     )
 
 
+#: Default private node number for the generated rpt.conf stanza. The
+#: shipped rpt.conf documents 1998 as the sample private node.
+DEFAULT_ASL_NODE = 1998
+
+
+def local_addresses() -> list[str]:
+    """Every IPv4 address this host could bind, most useful first.
+
+    Enumerates all interfaces rather than just the default route: a bridge
+    reached over a VPN binds the tunnel address, which is exactly the one a
+    default-route probe misses. The stdlib has no interface-enumeration API,
+    hence shelling out, with a probe as a fallback.
+    """
+    import re
+    import socket
+    import subprocess
+
+    found: list[str] = []
+
+    def add(addr: str) -> None:
+        if addr and addr not in found and not addr.startswith("127."):
+            found.append(addr)
+
+    for cmd in (["ip", "-4", "-o", "addr"], ["ifconfig"]):
+        try:
+            out = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=5, check=False
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if out:
+            for m in re.finditer(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out):
+                add(m.group(1))
+            break
+
+    if not found:
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("192.0.2.1", 9))      # TEST-NET-1, never routed
+            add(probe.getsockname()[0])
+            probe.close()
+        except OSError:
+            pass
+
+    # Loopback last: correct only when Asterisk runs on this same host.
+    return found + ["127.0.0.1"]
+
+
+def _prompt_text(title: str, current: Any, *, hint: str = "") -> str:
+    if hint:
+        print(f"\n{title}\n  {hint}", file=sys.stderr)
+    else:
+        print(f"\n{title}", file=sys.stderr)
+    suffix = f" [{current}]" if current not in (None, "") else ""
+    while True:
+        try:
+            raw = input(f"Value{suffix}: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            raise SelectionAborted("input closed") from None
+        if raw:
+            return raw
+        if current not in (None, ""):
+            return str(current)
+        print("  a value is required.", file=sys.stderr)
+
+
+def _prompt_port(title: str, current: Any, *, hint: str = "") -> int:
+    while True:
+        raw = _prompt_text(title, current, hint=hint)
+        try:
+            port = int(raw)
+        except ValueError:
+            print("  ports are numbers.", file=sys.stderr)
+            continue
+        if 1 <= port <= 65535:
+            return port
+        print("  a port is 1-65535.", file=sys.stderr)
+
+
+def run_usrp_setup(cfg: Any, config_path: str) -> int:
+    """Walk through the chan_usrp settings and write them to the config."""
+    print("\n--- AllStarLink (chan_usrp) setup ---", file=sys.stderr)
+    print(
+        "  The node's rxchannel line reads USRP/<bridge-ip>:<bridge-port>:<asterisk-port>.\n"
+        "  Answer these and the exact line is printed for you at the end.",
+        file=sys.stderr,
+    )
+
+    addrs = local_addresses()
+    try:
+        choices = [
+            Choice(a, a, "loopback: only if Asterisk runs on THIS host"
+                   if a.startswith("127.") else "reachable from other hosts")
+            for a in addrs
+        ]
+        choices.append(Choice("", "enter a different address", "typed in by hand"))
+        bind_host = _prompt_choice(
+            "This bridge's address  (the IP AllStarLink will send audio TO)",
+            choices,
+            cfg.usrp.bind_host,
+        )
+        if not bind_host:
+            bind_host = _prompt_text(
+                "Bridge address",
+                cfg.usrp.bind_host,
+                hint="Must be an address on THIS host that AllStarLink can reach.",
+            )
+        bind_port = _prompt_port(
+            "This bridge's UDP port  (it listens here; HISPORT in rxchannel)",
+            cfg.usrp.bind_port,
+            hint="AllStarLink's convention is 34001.",
+        )
+        asl_host = _prompt_text(
+            "AllStarLink host  (where Asterisk runs)",
+            cfg.usrp.asl_host,
+            hint="An IP or hostname. Use 127.0.0.1 if it is this same machine.",
+        )
+        asl_port = _prompt_port(
+            "Asterisk's UDP port  (it listens here; MYPORT in rxchannel)",
+            cfg.usrp.asl_port,
+            hint="AllStarLink's convention is 32001.",
+        )
+    except SelectionAborted as e:
+        print(f"\nUSRP setup {e}; nothing written.", file=sys.stderr)
+        return 0
+
+    remote = not bind_host.startswith("127.")
+    pending: list[tuple[str, str, Any, str]] = [
+        ("bridge", "backend", "usrp", "usrp"),
+        ("usrp", "bind_host", bind_host, bind_host),
+        ("usrp", "bind_port", bind_port, str(bind_port)),
+        ("usrp", "asl_host", asl_host, asl_host),
+        ("usrp", "asl_port", asl_port, str(asl_port)),
+    ]
+    if remote:
+        # USRP has no authentication; binding off-loopback must be deliberate.
+        pending.append(("usrp", "allow_remote_host", True, "true (bind is not loopback)"))
+
+    print("\nAbout to write:", file=sys.stderr)
+    for section, key, _v, shown in pending:
+        print(f"  {section}.{key}: {shown}", file=sys.stderr)
+    if remote:
+        print(
+            "\n  NOTE: USRP has no authentication or encryption. Binding to "
+            f"{bind_host}\n  means anyone who can reach {bind_host}:{bind_port} can key "
+            "the radio\n  system. Only do this on a VPN or an isolated segment.",
+            file=sys.stderr,
+        )
+
+    if not _confirm(f"\nUpdate {config_path}?"):
+        print("nothing written.", file=sys.stderr)
+        return 0
+
+    rc = _write(config_path, pending, sections=("usrp",))
+    if rc == 0:
+        print(render_asl_instructions(bind_host, bind_port, asl_port), file=sys.stderr)
+    return rc
+
+
+def render_asl_instructions(
+    bind_host: str, bind_port: int, asl_port: int, node: int = DEFAULT_ASL_NODE
+) -> str:
+    """The AllStarLink side, which the bridge cannot configure itself."""
+    return f"""
+=======================================================================
+ Now configure AllStarLink. Two files, on the Asterisk host.
+=======================================================================
+
+1. /etc/asterisk/modules.conf
+
+   chan_usrp is not loaded by default. Under [modules], make sure this
+   line is present and NOT commented out:
+
+       load => chan_usrp.so
+
+   ASL3 ships with autoload=no, so an absent or commented line means the
+   module never loads and the channel silently will not exist.
+
+2. /etc/asterisk/rpt.conf
+
+   Add a node for the bridge. A node has exactly ONE rxchannel -- adding
+   a second line to an existing node does not give it two inputs, one
+   silently wins -- so this is its own node, linked to your RF node.
+
+       [{node}]
+       rxchannel = USRP/{bind_host}:{bind_port}:{asl_port}
+       duplex = 0              ; no telemetry, no hangtime
+       hangtime = 0
+       tailmessagetime = 0
+       nounkeyct = 1           ; no courtesy tone
+       telemdefault = 0
+       idtime = 0              ; never send periodic IDs
+       politeid = 0
+       unlinkedct = |          ; suppress every courtesy tone
+       linkunkeyct = |
+       remotect = |
+       idtalkover = |
+       idrecording = |
+
+   The telemetry suppression matters: on a talkative node every courtesy
+   tone and ID arrives at the bridge as a keyed transmission and is
+   relayed to Zello as a spurious over.
+
+   Register it in the [nodes] stanza too:
+
+       {node} = radio@127.0.0.1/{node},NONE
+
+3. Link it to your RF node
+
+   On the RF node's stanza, connect at startup:
+
+       startup_macro = *3{node}
+
+   Then restart Asterisk -- an rxchannel change needs a restart, not a
+   reload:
+
+       systemctl restart asterisk
+
+   Verify with:
+       asterisk -rx "module show like chan_usrp"
+       asterisk -rx "core show channels" | grep -i usrp
+=======================================================================
+"""
+
+
 def run_device_setup(cfg: Any, config_path: str) -> int:
-    """Prompt for audio devices and COS source, then write the config.
+    """Prompt for the radio side, then write the config.
+
+    Offers a choice of backend first, because the two are peers: a
+    deployment picks one, and walking a USRP user through sound-card
+    selection they will never use is just noise.
 
     Returns a process exit code.
     """
@@ -284,10 +531,31 @@ def run_device_setup(cfg: Any, config_path: str) -> int:
         # on input here would hang a script that just wanted the listing.
         return 0
 
+    # Which radio side is this instance driving? The two are peers: a
+    # deployment picks one, so asking up front avoids walking someone
+    # through sound-card selection they will never use.
+    try:
+        backend = _prompt_choice(
+            "Radio side  (what is on the far end of this bridge)",
+            [
+                Choice("aioc", "Audio device  - a radio on a CM108/AIOC interface",
+                       f"{len(devices)} device(s) detected"),
+                Choice("usrp", "AllStarLink   - a node over chan_usrp (UDP)",
+                       "no radio or sound card needed on this host"),
+            ],
+            cfg.bridge.backend,
+        )
+    except SelectionAborted as e:
+        print(f"\nsetup {e}; nothing written.", file=sys.stderr)
+        return 0
+
+    if backend == "usrp":
+        return run_usrp_setup(cfg, config_path)
+
     inputs = [d for d in devices if d.supports("input")]
     outputs = [d for d in devices if d.supports("output")]
 
-    pending: list[tuple[str, str, Any, str]] = []   # section, key, value, shown
+    pending: list[tuple[str, str, Any, str]] = [("bridge", "backend", "aioc", "aioc")]
 
     try:
         if inputs:
@@ -359,7 +627,12 @@ def _current_index(selector: Any, devices: Sequence[Any]) -> int | None:
         return None
 
 
-def _write(config_path: str, pending: Sequence[tuple[str, str, Any, str]]) -> int:
+def _write(
+    config_path: str,
+    pending: Sequence[tuple[str, str, Any, str]],
+    *,
+    sections: Sequence[str] = (),
+) -> int:
     import os
     import tempfile
     from pathlib import Path
@@ -372,6 +645,8 @@ def _write(config_path: str, pending: Sequence[tuple[str, str, Any, str]]) -> in
         return 3
 
     updated = text
+    for section in sections:
+        updated = ensure_section(updated, section)
     for section, key, value, _shown in pending:
         try:
             updated = set_config_value(

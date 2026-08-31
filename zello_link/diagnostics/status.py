@@ -31,14 +31,34 @@ def render_validation(cfg: Any, *, device_report: list[str] | None = None) -> st
     add("")
     add(f"opus              {cfg.opus.sample_rate} Hz, {cfg.opus.frame_ms} ms/frame, "
         f"{cfg.opus.bitrate} bps, complexity {cfg.opus.complexity}")
-    add(f"audio in          {cfg.sound.input_device!r}")
-    add(f"audio out         {cfg.sound.output_device!r}")
-    add(f"audio format      {cfg.sound.sample_rate} Hz, {cfg.sound.channels} ch, "
-        f"{cfg.sound.block_ms} ms blocks")
-    add(f"rx gain           {cfg.sound.rx_gain_db:+.1f} dB   (radio receive -> Zello)")
-    add(f"tx gain           {cfg.sound.tx_gain_db:+.1f} dB   (Zello -> radio transmit)")
-    add(f"jitter buffer     {cfg.sound.jitter_ms} ms target, {cfg.sound.jitter_max_ms} ms max")
     add("")
+    add(f"backend           {cfg.bridge.backend}")
+
+    if cfg.bridge.backend == "aioc":
+        add(f"audio in          {cfg.sound.input_device!r}")
+        add(f"audio out         {cfg.sound.output_device!r}")
+        add(f"audio format      {cfg.sound.sample_rate} Hz, {cfg.sound.channels} ch, "
+            f"{cfg.sound.block_ms} ms blocks")
+        add(f"rx gain           {cfg.sound.rx_gain_db:+.1f} dB   (radio receive -> Zello)")
+        add(f"tx gain           {cfg.sound.tx_gain_db:+.1f} dB   (Zello -> radio transmit)")
+        add(f"jitter buffer     {cfg.sound.jitter_ms} ms target, "
+            f"{cfg.sound.jitter_max_ms} ms max")
+        add("")
+    if cfg.bridge.backend == "usrp":
+        add(f"usrp listen       {cfg.usrp.bind_host}:{cfg.usrp.bind_port}"
+            f"   (HISPORT in the node's rxchannel)")
+        add(f"usrp peer         {cfg.usrp.asl_host}:{cfg.usrp.asl_port}"
+            f"   (MYPORT: where Asterisk listens)")
+        add(f"usrp rxchannel    USRP/{cfg.usrp.bind_host}:{cfg.usrp.bind_port}"
+            f":{cfg.usrp.asl_port}")
+        add(f"usrp audio        {cfg.usrp.sample_rate} Hz, {cfg.usrp.frame_ms} ms "
+            "frames (fixed by chan_usrp)")
+        add(f"usrp source check {'strict' if cfg.usrp.strict_source else 'DISABLED'}"
+            f", remote bind {'allowed' if cfg.usrp.allow_remote_host else 'refused'}")
+        add("")
+        add("PTT, COS and the sound devices are not used by this backend.")
+        return "\n".join(lines + _tail(cfg, device_report))
+
     add(f"ptt mode          {cfg.ptt.mode}")
     if cfg.ptt.tty_device:
         add(f"ptt tty           {cfg.ptt.tty_device}")
@@ -76,22 +96,26 @@ def render_validation(cfg: Any, *, device_report: list[str] | None = None) -> st
     budget = cfg.ptt.pre_key_ms + cfg.sound.jitter_ms + cfg.sound.block_ms + resample_ms
     add(f"latency estimate  {budget:.0f} ms of {cfg.bridge.latency_budget_ms} ms budget")
 
+    return "\n".join(lines + _tail(cfg, device_report))
+
+
+def _tail(cfg: Any, device_report: list[str] | None) -> list[str]:
+    """Device report and warnings, shared by every backend's output."""
+    out: list[str] = []
     if device_report:
-        add("")
-        add("devices")
-        lines.extend(f"  {line}" for line in device_report)
+        out.append("")
+        out.append("devices")
+        out.extend(f"  {line}" for line in device_report)
 
     warnings = cfg.warnings()
     if warnings:
-        add("")
-        add(f"{len(warnings)} warning(s):")
-        for w in warnings:
-            add(f"  ! {w}")
+        out.append("")
+        out.append(f"{len(warnings)} warning(s):")
+        out.extend(f"  ! {w}" for w in warnings)
     else:
-        add("")
-        add("no warnings")
-
-    return "\n".join(lines)
+        out.append("")
+        out.append("no warnings")
+    return out
 
 
 def _describe_credentials(cfg: Any) -> str:

@@ -562,6 +562,21 @@ class BridgeConfig(_Model):
         """Non-fatal advisories, surfaced by --validate and at startup."""
         out: list[str] = []
 
+        if self.bridge.backend == "usrp":
+            if not self.usrp.strict_source:
+                out.append(
+                    "usrp.strict_source is false: datagrams from ANY host are "
+                    "accepted. USRP has no authentication, so this lets anyone "
+                    "who can reach the port key the radio system."
+                )
+            if self.usrp.allow_remote_host:
+                out.append(
+                    f"usrp.bind_host is {self.usrp.bind_host}, not loopback. The "
+                    "UDP port is unauthenticated -- make sure the path to it is "
+                    "a VPN or an isolated segment."
+                )
+            return out
+
         if self.cos.mode == "internal_audio" and self.cos.threshold_dbfs < DBFS_FLOOR:
             out.append(
                 f"cos.threshold_dbfs ({self.cos.threshold_dbfs}) is below the detector's "

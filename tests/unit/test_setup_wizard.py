@@ -279,3 +279,115 @@ class TestAiocCosWarnings:
         p = tmp_path / "b.yaml"
         p.write_text(yaml.safe_dump(data))
         assert not any("not published" in w for w in load_config(p).warnings())
+
+
+class TestSectionCreation:
+    """A config written for AIOC has no usrp: block to insert into."""
+
+    def test_creates_a_missing_section(self):
+        from zello_link.diagnostics.setup_wizard import ensure_section
+
+        out = ensure_section('bridge:\n  backend: "aioc"\n', "usrp")
+        assert "\nusrp:\n" in out
+
+    def test_is_idempotent(self):
+        from zello_link.diagnostics.setup_wizard import ensure_section
+
+        src = 'usrp:\n  bind_port: 34001\n'
+        assert ensure_section(src, "usrp") == src
+
+    def test_does_not_disturb_existing_content(self):
+        from zello_link.diagnostics.setup_wizard import ensure_section
+
+        src = 'bridge:\n  backend: "aioc"   # note\n'
+        out = ensure_section(src, "usrp")
+        assert src in out
+        assert "# note" in out
+
+    def test_created_section_accepts_inserts(self):
+        import yaml
+
+        from zello_link.diagnostics.setup_wizard import ensure_section, set_config_value
+
+        out = ensure_section('bridge:\n  backend: "aioc"\n', "usrp")
+        out = set_config_value(out, "usrp", "bind_port", "34001", insert_if_missing=True)
+        assert yaml.safe_load(out)["usrp"]["bind_port"] == 34001
+
+
+class TestLocalAddresses:
+    """A VPN-reached bridge binds the tunnel address, which a default-route
+    probe misses -- so all interfaces are enumerated."""
+
+    def test_always_offers_loopback_last(self):
+        from zello_link.diagnostics.setup_wizard import local_addresses
+
+        addrs = local_addresses()
+        assert addrs[-1] == "127.0.0.1"
+
+    def test_no_duplicates(self):
+        from zello_link.diagnostics.setup_wizard import local_addresses
+
+        addrs = local_addresses()
+        assert len(addrs) == len(set(addrs))
+
+    def test_excludes_other_loopback_addresses(self):
+        from zello_link.diagnostics.setup_wizard import local_addresses
+
+        assert [a for a in local_addresses() if a.startswith("127.")] == ["127.0.0.1"]
+
+
+class TestAslInstructions:
+    """The generated rpt.conf guidance is the payoff: the operator should not
+    have to work out the rxchannel field order themselves."""
+
+    def _text(self, **kw):
+        from zello_link.diagnostics.setup_wizard import render_asl_instructions
+
+        kw = {"bind_host": "10.0.0.5", "bind_port": 34001, "asl_port": 32001, **kw}
+        return render_asl_instructions(**kw)
+
+    def test_rxchannel_field_order_is_hisip_hisport_myport(self):
+        assert "USRP/10.0.0.5:34001:32001" in self._text()
+
+    def test_uses_the_configured_values(self):
+        t = self._text(bind_host="192.168.1.9", bind_port=44001, asl_port=42001)
+        assert "USRP/192.168.1.9:44001:42001" in t
+
+    def test_defaults_to_node_1998(self):
+        t = self._text()
+        assert "[1998]" in t
+        assert "1998 = radio@127.0.0.1/1998,NONE" in t
+
+    def test_node_number_is_overridable(self):
+        t = self._text(node=1234)
+        assert "[1234]" in t and "*31234" in t
+
+    def test_covers_modules_conf(self):
+        t = self._text()
+        assert "modules.conf" in t
+        assert "load => chan_usrp.so" in t
+        assert "autoload=no" in t
+
+    def test_suppresses_telemetry_in_the_stanza(self):
+        """Courtesy tones would reach Zello as spurious transmissions."""
+        t = self._text()
+        for setting in ("duplex = 0", "nounkeyct = 1", "telemdefault = 0",
+                        "idtime = 0", "unlinkedct = |", "linkunkeyct = |"):
+            assert setting in t, f"missing {setting}"
+
+    def test_warns_about_one_rxchannel_per_node(self):
+        t = self._text()
+        assert "ONE rxchannel" in t
+
+    def test_says_a_restart_is_needed_not_a_reload(self):
+        t = self._text()
+        assert "systemctl restart asterisk" in t
+        assert "not a" in t and "reload" in t
+
+    def test_includes_verification_commands(self):
+        t = self._text()
+        assert "module show like chan_usrp" in t
+        assert "core show channels" in t
+
+    def test_includes_the_startup_macro(self):
+        assert "startup_macro = *31998" in self._text()
