@@ -110,3 +110,45 @@ class TestReadmeBlock:
     def test_says_it_is_not_curl_pipe_bash(self):
         """The distinction is the reason to prefer this form; say so."""
         assert "curl | bash" in self._text() or "curl` | `bash" in self._text()
+
+
+class TestReadmeReflectsShippedFeatures:
+    """The front page said USRP was "planned" long after it was carrying audio.
+
+    Documentation drift is cheap to create and expensive to find: someone
+    evaluating the project reads the README and concludes a working feature
+    does not exist. These pin the claims that went stale.
+    """
+
+    def _text(self) -> str:
+        return README.read_text()
+
+    def test_usrp_is_not_described_as_unreleased(self):
+        text = self._text().lower()
+        for phrase in ("specified for a future release", "planned second backend"):
+            assert phrase not in text, f"README still calls the USRP backend {phrase!r}"
+
+    def test_allstarlink_has_its_own_section(self):
+        assert "### AllStarLink (USRP)" in self._text()
+
+    def test_duplex_requirement_is_documented(self):
+        """The single setting that silently prevents ASL from ever keying."""
+        text = self._text()
+        assert "duplex = 3" in text
+
+    def test_loopback_is_recommended_over_the_network(self):
+        # Collapse wrapping: prose is hard-wrapped, so phrases span newlines.
+        text = " ".join(self._text().lower().split())
+        assert "loopback" in text
+        assert "no authentication" in text
+
+    def test_verified_hardware_is_listed(self):
+        text = self._text()
+        for path in ("Digirig Mobile", "Digirig Lite", "CM108 HID PTT"):
+            assert path in text
+
+    def test_removed_vcos_is_not_offered(self):
+        """It must not read as an available option anywhere on the page."""
+        text = self._text()
+        if "aioc_virtual" in text:
+            assert "removed" in text.lower()

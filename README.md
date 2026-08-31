@@ -9,9 +9,9 @@ transports audio and PTT/COS only. It never contains, requests, or handles an
 encryption key.
 
 Originally built against an encrypted DMR handheld, but nothing in it is
-DMR-specific: any radio reachable through a CM108-style interface works, and
-an AllStarLink backend over `chan_usrp` is specified for a future release —
-which needs no radio attached at all.
+DMR-specific: any radio reachable through a CM108-style interface works. There
+is also an AllStarLink backend over `chan_usrp`, which needs no radio attached
+at all — it bridges a Zello channel straight onto an ASL node.
 
 ## What it does
 
@@ -19,7 +19,7 @@ which needs no radio attached at all.
 Zello channel  <--TLS WebSocket-->  zello-link  <--USB audio + PTT/COS-->  radio
 ```
 
-Planned second backend, replacing the radio side entirely:
+Second backend, replacing the radio side entirely:
 
 ```
 Zello channel  <--TLS WebSocket-->  zello-link  <--UDP/chan_usrp-->  AllStarLink
@@ -132,6 +132,35 @@ zello-link --config /etc/zello-link/west.yaml
 Start from [`examples/bridge.yaml`](examples/bridge.yaml) — every option is
 documented inline. The config path is mandatory; the bridge never assumes
 `/dev/ttyACM0` or a default sound card.
+
+### AllStarLink (USRP)
+
+Set `bridge.backend: usrp` and the radio side becomes an ASL node over
+`chan_usrp`. No sound card, no PTT line, no COS tuning: key state is carried
+in the protocol. `zello-link --setup` will ask for the node number and ports
+and then print the AllStarLink side for you.
+
+Three things decide whether this works, and all three fail silently:
+
+- **Run it on the AllStarLink host, over loopback.** `chan_usrp` has no
+  authentication or encryption whatsoever, and loopback also sidesteps the
+  firewall. If you must go over a network, `usrp.strict_source` and
+  `usrp.allow_remote_host` exist, and the path should be a VPN.
+- **The node needs `duplex = 3`.** At `duplex` 0 or 1 an idle node never
+  writes to the channel, and `chan_usrp` only delivers received audio during a
+  write — so audio reaches ASL and the node never keys. Nothing logs a
+  problem.
+- **Open the port if the bridge is remote.** ASL3's `firewalld` zone permits
+  `iax2` and `echolink` but not the USRP port, and rejected datagrams still
+  show up in `tcpdump`, which makes this look like a `chan_usrp` bug.
+
+`asterisk -rx "usrp show"` is the fastest diagnosis: `Read` stuck at 0 means
+the packets never reached the socket (firewall), while `Read` climbing with
+`Write` at 0 is the `duplex` problem.
+
+A node has exactly **one** `rxchannel`. Adding a second line does not give it
+two inputs — one silently wins — so the bridge wants its own node, linked to
+your RF node.
 
 ### Diagnostics
 
@@ -272,15 +301,32 @@ v0.1. The Zello Channel API is labelled beta by Zello, so all protocol
 serialization is isolated in `zello/protocol.py` and covered by tests against
 the published byte layouts.
 
-Two things still need bench verification against real hardware:
+**Verified against real hardware:**
 
-- **CM108/HID report layout.** The AIOC README documents that firmware ≥ 1.2.0
-  exposes a CM108-compatible HID endpoint, but not its byte layout. What is
-  implemented is the conventional CM108 GPIO report, isolated in
-  `Cm108Report` and unit tested, so a bench finding is a one-class change.
-  Serial PTT (`DTR=1, RTS=0`) is documented and is the safer default.
+| path | notes |
+|---|---|
+| Serial PTT — DTR | AIOC, on macOS and Linux |
+| Serial PTT — RTS | Digirig Mobile |
+| CM108 HID PTT — GPIO 3 | AIOC and Digirig Lite; two vendors |
+| Audio-level COS | the proven detection path on every interface |
+| AllStarLink over `chan_usrp` | bidirectional, against a live ASL3 node |
+
+Interfaces are auto-detected by USB id (AIOC, C-Media CM108/CM108AH/CM119),
+so `ptt.hid_device` should normally be left unset — a hardcoded path is
+specific to the hidapi build that produced it.
+
+**Not verified:**
+
+- **`cos.mode: aioc_hardware`** needs a real COS wire brought into the
+  interface — a RIM-style adapter, or an AIOC with the COS pad soldered — and
+  no device here has produced a HID input report. `--validate` warns.
 - **`cos.configure_aioc_on_start`** raises `NotImplementedError` rather than
   writing speculative registers to a radio interface. Program the AIOC's
   threshold and tail with the vendor tool.
 
-See spec section 22 for the full bench checklist.
+The AIOC's firmware VCOS (`cos.mode: aioc_virtual`) was **removed**: it does
+not work on the hardware, confirmed on two units and independently at the
+device's own registers. Use `internal_audio`.
+
+[`docs/hardware-notes.md`](docs/hardware-notes.md) has the byte layouts, the
+failure modes, and the traps that cost the most time.
