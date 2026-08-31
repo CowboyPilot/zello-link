@@ -38,11 +38,25 @@ Zello channel  <--TLS WebSocket-->  zello-link  <--UDP/chan_usrp-->  AllStarLink
 
 **One shot install — copy/paste**
 
+**Linux / Raspberry Pi OS** (no `git` needed):
+
+```bash
+wget -qO- https://github.com/CowboyPilot/zello-link/archive/refs/heads/main.tar.gz | tar xz && cd zello-link-main && ./quickstart.sh
+```
+
+**macOS** (ships `curl`, not `wget`):
+
+```bash
+curl -fsSL https://github.com/CowboyPilot/zello-link/archive/refs/heads/main.tar.gz | tar xz && cd zello-link-main && ./quickstart.sh
+```
+
+**With `git`, if you have it** — better if you intend to pull updates:
+
 ```bash
 git clone https://github.com/CowboyPilot/zello-link.git && cd zello-link && ./quickstart.sh
 ```
 
-That clones the repo, builds a virtualenv, installs the package with its
+That fetches the code, builds a virtualenv, installs the package with its
 hardware extras, and then offers to run the setup wizard — which asks for your
 Zello channel and account, which interface the radio is on, and which
 directions to carry, and writes:
@@ -60,11 +74,14 @@ validates its own output before telling you it worked. Then start the bridge:
 ./run-<name>.sh
 ```
 
-Two deliberate choices. It is a **paste-able command, not `curl | bash`** — you
-can read every line of `quickstart.sh` in this repo before running it, which
-you cannot do with a URL. And it **never sudo's**: `libopus`, PortAudio and
-hidapi are C libraries needing root, so the installer detects what is missing
-and prints the exact command for your platform, leaving the decision to you.
+The archive is **extracted before anything runs** — nothing is piped into a
+shell. `quickstart.sh` lands on disk where you can read it, and if you would
+rather look first, stop after `tar xz` and run it yourself. Every line of it
+is also visible in this repo.
+
+It **never sudo's**. `libopus`, PortAudio and hidapi are C libraries that need
+root, so the installer detects what is missing and prints the exact command
+for your platform, leaving that decision to you.
 
 Skip the wizard with `./quickstart.sh --no-wizard`, or add the test tooling
 with `./quickstart.sh --dev`.

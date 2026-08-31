@@ -102,14 +102,43 @@ class TestReadmeBlock:
         text = self._text()
         assert "github.com/CowboyPilot/zello-link" in text
 
-    def test_command_is_copy_pasteable_as_one_line(self):
+    def test_offers_a_one_liner_that_needs_no_git(self):
+        """git is absent on plenty of Raspberry Pi and appliance images."""
         text = self._text()
-        m = re.search(r"git clone \S+ && cd \S+ && \./quickstart\.sh", text)
-        assert m, "the one-shot command should be a single pasteable line"
+        assert re.search(
+            r"wget \S+ https://\S+\.tar\.gz \| tar xz && cd \S+ && \./quickstart\.sh",
+            text,
+        ), "expected a wget|tar one-liner"
 
-    def test_says_it_is_not_curl_pipe_bash(self):
-        """The distinction is the reason to prefer this form; say so."""
-        assert "curl | bash" in self._text() or "curl` | `bash" in self._text()
+    def test_offers_curl_for_macos(self):
+        """macOS ships curl and not wget, so wget alone strands Mac users."""
+        assert re.search(
+            r"curl \S+ https://\S+\.tar\.gz \| tar xz && cd \S+ && \./quickstart\.sh",
+            self._text(),
+        )
+
+    def test_still_offers_git_for_those_who_have_it(self):
+        assert re.search(
+            r"git clone \S+ && cd \S+ && \./quickstart\.sh", self._text()
+        )
+
+    def test_tarball_directory_matches_githubs_naming(self):
+        """A GitHub branch tarball extracts to <repo>-<branch>, not <repo>."""
+        text = self._text()
+        assert "zello-link-main" in text
+
+    def test_does_not_pipe_a_script_into_a_shell(self):
+        """Piping the archive into tar is fine; piping code into sh is not.
+
+        The distinction is what makes quickstart.sh reviewable before it runs,
+        so it must not quietly become `| bash` later.
+        """
+        text = self._text()
+        assert "| bash" not in text and "| sh" not in text
+
+    def test_says_the_archive_is_extracted_before_anything_runs(self):
+        text = " ".join(self._text().lower().split())
+        assert "extracted before anything runs" in text
 
 
 class TestReadmeReflectsShippedFeatures:
