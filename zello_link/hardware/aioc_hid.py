@@ -65,7 +65,9 @@ AIOC_PID = 0x7388
 #: configuration at all.
 CM108_DEVICE_IDS: dict[tuple[int, int], str] = {
     (0x1209, 0x7388): "AIOC All-In-One-Cable",
-    (0x0D8C, 0x0012): "C-Media CM108 (Digirig Lite, generic USB sound)",
+    # Shared by the Digirig Lite and the sound half of the Digirig Mobile,
+    # among many generic adapters -- the id cannot tell them apart.
+    (0x0D8C, 0x0012): "C-Media CM108 (Digirig Lite/Mobile, generic USB sound)",
     (0x0D8C, 0x000C): "C-Media CM108",
     (0x0D8C, 0x000E): "C-Media CM108",
     (0x0D8C, 0x013C): "C-Media CM108AH",

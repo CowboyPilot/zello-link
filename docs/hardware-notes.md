@@ -9,7 +9,7 @@ this file records what the hardware did.
 | path | status |
 |---|---|
 | Serial PTT (DTR) — AIOC | **verified** on macOS and Linux |
-| Serial PTT (RTS) — Digirig Mobile | implemented, **no hardware tested** |
+| Serial PTT (RTS) — Digirig Mobile | **verified** on Linux |
 | CM108 HID PTT (GPIO 3 output report) | **verified** — AIOC *and* Digirig Lite |
 | Digirig Lite (C-Media `0d8c:0012`) | **verified** — auto-detected, keys correctly |
 | AIOC CM108 HID PTT | **verified** with the corrected byte offsets |
@@ -54,6 +54,22 @@ whatever the AIOC is configured for.
 An earlier implementation read **byte 2** — the *output* report's GPIO data
 byte — against an *input* report, and treated the bit as a 1-8 GPIO pin.
 Wrong byte and wrong bit, both silent.
+
+## Digirig Mobile
+
+Presents as two devices behind an internal Microchip hub:
+
+| device | node | role |
+|---|---|---|
+| CP2102N UART (`10c4:ea60`) | `/dev/ttyUSB0` | **PTT via RTS**, and CAT |
+| C-Media CM108 (`0d8c:0012`) | sound card, `hidraw0` | audio |
+
+So it is `ptt.mode: serial` with `ptt.serial_signal: rts` — not a CM108 GPIO
+interface, even though it contains one. Use the `/dev/serial/by-id/...`
+path rather than `/dev/ttyUSB0`, which renumbers.
+
+Note the sound half shares `0d8c:0012` with the Digirig Lite and many generic
+adapters, so the USB id alone cannot tell those devices apart.
 
 ## The CM108 output report: two things that must both be right
 
