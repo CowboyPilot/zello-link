@@ -83,6 +83,26 @@ It **never sudo's**. `libopus`, PortAudio and hidapi are C libraries that need
 root, so the installer detects what is missing and prints the exact command
 for your platform, leaving that decision to you.
 
+### Why a virtualenv
+
+Not a development convenience — it is required on the platforms this targets,
+and you never have to activate it.
+
+Debian 12 and Raspberry Pi OS ship `/usr/lib/python3.11/EXTERNALLY-MANAGED`
+(PEP 668), so `pip install` into the system Python is refused outright. Their
+packaged dependencies are also too old: `python3-pydantic` is 1.10 where this
+needs 2.6+, a different major API, and `python3-websockets` is 10.4 against a
+12.0 floor.
+
+`--break-system-packages` would install pydantic 2.x over the apt-managed
+1.10 and break anything else on the host that depends on it — a poor trade on
+an AllStarLink node. `pipx` works, but creates a virtualenv itself.
+
+So the installer makes one, and everything points at it by absolute path: the
+generated `run-<name>.sh`, and the systemd unit. There is nothing to activate,
+and no shell profile to edit. It only shows up if you invoke the CLI by hand,
+as `.venv/bin/zello-link` rather than `zello-link`.
+
 Skip the wizard with `./quickstart.sh --no-wizard`, or add the test tooling
 with `./quickstart.sh --dev`.
 

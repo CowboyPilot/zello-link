@@ -181,3 +181,15 @@ class TestReadmeReflectsShippedFeatures:
         text = self._text()
         if "aioc_virtual" in text:
             assert "removed" in text.lower()
+
+    def test_explains_why_a_virtualenv_is_required(self):
+        """It is a PEP 668 constraint, not a style choice, and gets asked about.
+
+        Debian 12 refuses system-wide pip, and its packaged pydantic is 1.10
+        against a 2.6+ requirement -- so "can we skip the venv?" has a real
+        answer that belongs on the page.
+        """
+        text = " ".join(README.read_text().split())
+        assert "EXTERNALLY-MANAGED" in text
+        assert "pydantic" in text
+        assert "nothing to activate" in text.lower()
