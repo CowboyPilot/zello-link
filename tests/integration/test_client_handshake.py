@@ -23,7 +23,7 @@ from zello_link.config import load_config
 from zello_link.zello.client import ZelloClient, ZelloError
 
 CONFIG = {
-    "config_version": 1,
+    "config_version": 2,
     "instance": {"name": "handshake"},
     "zello": {
         "channel": "Test Channel",

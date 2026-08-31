@@ -17,7 +17,7 @@ from zello_link.config import (
 )
 
 MINIMAL = """
-config_version: 1
+config_version: 2
 instance:
   name: test-bridge
 zello:

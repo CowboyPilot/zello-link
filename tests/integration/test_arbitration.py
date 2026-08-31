@@ -20,7 +20,7 @@ from zello_link.state import State
 from zello_link.zello.protocol import CodecHeader
 
 CONFIG = {
-    "config_version": 1,
+    "config_version": 2,
     "instance": {"name": "test-bridge", "log_level": "DEBUG"},
     "zello": {"channel": "Event Security", "username": "u", "auth_token": "tok-abcdef"},
     "sound": {"input_device": "fake-in", "output_device": "fake-out"},

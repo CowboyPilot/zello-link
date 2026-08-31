@@ -37,12 +37,24 @@ __all__ = [
 
 # The schema version this build understands. Bumped on any breaking config
 # change so an old file fails loudly instead of being silently mis-parsed.
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 # The internal COS detector floors RMS at 1 LSB before the log, so the lowest
 # level it can ever report is 20*log10(1/32768). A threshold below this can
 # never be crossed -- validation warns rather than accepting a dead config.
 DBFS_FLOOR = -90.3
+
+def _is_loopback(host: str) -> bool:
+    """True for an address that cannot be reached from another machine."""
+    import ipaddress
+
+    if host in ("localhost", ""):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -240,11 +252,10 @@ class SoundConfig(_Model):
     def _check(self) -> "SoundConfig":
         if self.jitter_max_ms < self.jitter_ms:
             raise ValueError("sound.jitter_max_ms must be >= sound.jitter_ms")
-        if self.input_device is None and self.output_device is None:
-            raise ValueError(
-                "sound: at least one of input_device/output_device must be set; "
-                "the bridge never guesses a default sound card"
-            )
+        # NOTE: "at least one device must be set" is NOT checked here -- see
+        # the note on PttConfig. A USRP deployment has no sound card, so the
+        # requirement is enforced in BridgeConfig._cross_section, gated on
+        # bridge.backend.
         return self
 
     @property
@@ -264,13 +275,11 @@ class PttConfig(_Model):
     # application state or Zello control message.
     max_tx_s: float = Field(default=180.0, gt=0, le=3600)
 
-    @model_validator(mode="after")
-    def _device_present(self) -> "PttConfig":
-        if self.mode == "serial" and not self.tty_device:
-            raise ValueError("ptt.tty_device is required when ptt.mode='serial'")
-        if self.mode == "cm108_hid" and not self.hid_device:
-            raise ValueError("ptt.hid_device is required when ptt.mode='cm108_hid'")
-        return self
+    # NOTE: "serial needs a tty" and "cm108_hid needs a hid path" are NOT
+    # checked here. This model cannot see bridge.backend, and the USRP
+    # backend has no PTT line at all -- enforcing it here would make a valid
+    # USRP config (which omits the ptt section entirely) unloadable. The
+    # checks live in BridgeConfig._cross_section, gated on the backend.
 
 
 class CosConfig(_Model):
@@ -310,6 +319,12 @@ class CosConfig(_Model):
 
 
 class BridgeConfigSection(_Model):
+    # Which radio-side backend this instance drives. One per process: a
+    # deployment picks a backend, it is not a layer on top of another.
+    #   aioc  -- a radio over a CM108-class USB interface (audio + PTT + COS)
+    #   usrp  -- an AllStarLink node over chan_usrp (UDP, no radio required)
+    backend: Literal["aioc", "usrp"] = "aioc"
+
     rf_to_zello: bool = True
     zello_to_rf: bool = True
 
@@ -373,6 +388,56 @@ class HardwareConfig(_Model):
         return self
 
 
+class UsrpConfig(_Model):
+    """AllStarLink chan_usrp backend.
+
+    Rates are fixed by chan_usrp, not by preference: it is signed-linear only
+    at 8 kHz with 160-sample frames, so anything else is rejected rather than
+    quietly resampled into a format ASL will misread.
+    """
+
+    bind_host: str = "127.0.0.1"
+    bind_port: int = Field(default=34001, ge=1, le=65535)
+    asl_host: str = "127.0.0.1"
+    asl_port: int = Field(default=32001, ge=1, le=65535)
+
+    sample_rate: Literal[8000] = 8000
+    frame_ms: Literal[20] = 20
+
+    # Optional bridge-side tail after a Zello stream ends.
+    tx_hang_ms: int = Field(default=0, ge=0, le=5000)
+
+    # UDP can drop the explicit unkey; without this the Zello stream would
+    # stay open indefinitely.
+    rx_unkey_timeout_ms: int = Field(default=500, ge=50, le=10000)
+    inactivity_timeout_ms: int = Field(default=3000, ge=0, le=60000)
+
+    sequence_start: int = Field(default=0, ge=0, le=0xFFFFFFFF)
+
+    # USRP carries no authentication or encryption whatsoever, so the source
+    # check is the only thing standing between the bridge and anyone who can
+    # reach the port.
+    strict_source: bool = True
+    allow_remote_host: bool = False
+
+    jitter_buffer_ms: int = Field(default=60, ge=0, le=1000)
+    max_jitter_buffer_ms: int = Field(default=200, ge=20, le=2000)
+    packet_loss_fill: Literal["silence", "drop"] = "silence"
+
+    @model_validator(mode="after")
+    def _check(self) -> "UsrpConfig":
+        if self.max_jitter_buffer_ms < self.jitter_buffer_ms:
+            raise ValueError(
+                "usrp.max_jitter_buffer_ms must be >= usrp.jitter_buffer_ms"
+            )
+        if self.bind_port == self.asl_port and self.bind_host == self.asl_host:
+            raise ValueError(
+                "usrp.bind_port and usrp.asl_port must differ on the same host; "
+                "the rxchannel is USRP/<our-ip>:<our-port>:<asterisk-port>"
+            )
+        return self
+
+
 class LoggingConfig(_Model):
     console: bool = True
     file: Path | None = None
@@ -397,11 +462,12 @@ class BridgeConfig(_Model):
     instance: InstanceConfig
     zello: ZelloConfig
     opus: OpusConfig = Field(default_factory=OpusConfig)
-    sound: SoundConfig
+    sound: SoundConfig = Field(default_factory=SoundConfig)
     ptt: PttConfig = Field(default_factory=PttConfig)
     cos: CosConfig = Field(default_factory=CosConfig)
     bridge: BridgeConfigSection = Field(default_factory=BridgeConfigSection)
     hardware: HardwareConfig = Field(default_factory=HardwareConfig)
+    usrp: UsrpConfig = Field(default_factory=UsrpConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
 
@@ -417,20 +483,7 @@ class BridgeConfig(_Model):
 
     @model_validator(mode="after")
     def _cross_section(self) -> "BridgeConfig":
-        if self.sound.sample_rate != self.opus.sample_rate:
-            # Legal, but it forces a resampler into the hot path. Surfaced as
-            # a warning by warnings() rather than a hard failure.
-            pass
-        if self.sound.block_ms != self.opus.frame_ms:
-            raise ValueError(
-                f"sound.block_ms ({self.sound.block_ms}) must equal opus.frame_ms "
-                f"({self.opus.frame_ms}); a capture block maps 1:1 to an Opus frame in v0.1"
-            )
-        if self.bridge.rf_to_zello and self.cos.mode == "disabled":
-            raise ValueError(
-                "bridge.rf_to_zello is true but cos.mode is 'disabled'; "
-                "RF-to-Zello has no way to detect receive activity"
-            )
+        # Backend-neutral rules first.
         if self.bridge.rate_limit_cooldown_max_s < self.bridge.rate_limit_cooldown_s:
             raise ValueError(
                 "bridge.rate_limit_cooldown_max_s must be >= rate_limit_cooldown_s"
@@ -442,10 +495,52 @@ class BridgeConfig(_Model):
                 "for max(min_tx_ms, speech + hang_ms), so a floor at or below the "
                 "hang is never the binding constraint"
             )
-        if self.cos.mode == "internal_audio" and self.sound.input_device is None:
-            raise ValueError("cos.mode='internal_audio' requires sound.input_device")
-        if self.bridge.zello_to_rf and self.sound.output_device is None:
-            raise ValueError("bridge.zello_to_rf requires sound.output_device")
+
+        # The rest is AIOC-shaped: a sound card, a PTT line, an audio-level
+        # COS. The USRP backend has none of those -- key state is
+        # protocol-native and there is no radio -- so requiring them would
+        # make a perfectly valid USRP config unloadable.
+        if self.bridge.backend == "aioc":
+            if self.sound.input_device is None and self.sound.output_device is None:
+                raise ValueError(
+                    "sound: at least one of input_device/output_device must be "
+                    "set for the aioc backend; the bridge never guesses a "
+                    "default sound card"
+                )
+            if self.sound.block_ms != self.opus.frame_ms:
+                raise ValueError(
+                    f"sound.block_ms ({self.sound.block_ms}) must equal "
+                    f"opus.frame_ms ({self.opus.frame_ms}); a capture block maps "
+                    "1:1 to an Opus frame in v0.1"
+                )
+            if self.bridge.rf_to_zello and self.cos.mode == "disabled":
+                raise ValueError(
+                    "bridge.rf_to_zello is true but cos.mode is 'disabled'; "
+                    "RF-to-Zello has no way to detect receive activity"
+                )
+            if self.cos.mode == "internal_audio" and self.sound.input_device is None:
+                raise ValueError(
+                    "cos.mode='internal_audio' requires sound.input_device"
+                )
+            if self.bridge.zello_to_rf and self.sound.output_device is None:
+                raise ValueError("bridge.zello_to_rf requires sound.output_device")
+            if self.ptt.mode == "serial" and not self.ptt.tty_device:
+                raise ValueError("ptt.tty_device is required when ptt.mode='serial'")
+            if self.ptt.mode == "cm108_hid" and not self.ptt.hid_device:
+                raise ValueError("ptt.hid_device is required when ptt.mode='cm108_hid'")
+
+        if self.bridge.backend == "usrp":
+            # USRP carries no authentication or encryption whatsoever, so
+            # binding anywhere reachable hands PTT of a radio system to
+            # whoever can reach the port.
+            if not self.usrp.allow_remote_host and not _is_loopback(self.usrp.bind_host):
+                raise ValueError(
+                    f"usrp.bind_host is {self.usrp.bind_host!r}, which exposes an "
+                    "unauthenticated UDP port beyond this host. USRP has no "
+                    "authentication or encryption at all. Set "
+                    "usrp.allow_remote_host: true only if the path is already "
+                    "trusted (a VPN, or an isolated segment)."
+                )
         return self
 
     def resampler_delay_ms(self) -> float:

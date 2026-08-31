@@ -143,7 +143,7 @@ class TestConfigIntegration:
         cfg_path.write_text(
             yaml.safe_dump(
                 {
-                    "config_version": 1,
+                    "config_version": 2,
                     "instance": {"name": "t"},
                     "zello": {
                         "channel": "c",

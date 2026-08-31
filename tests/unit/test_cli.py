@@ -11,7 +11,7 @@ import pytest
 from zello_link.cli import EXIT_CONFIG, EXIT_DEVICE, EXIT_OK, build_parser, main
 
 CONFIG = {
-    "config_version": 1,
+    "config_version": 2,
     "instance": {"name": "cli-test"},
     "zello": {"channel": "C", "username": "u", "auth_token": "tok-abcdef"},
     "sound": {"input_device": "fake", "output_device": "fake"},

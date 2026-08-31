@@ -21,7 +21,7 @@ from zello_link.hardware.ptt import NullPtt, SafePtt
 from zello_link.zello.protocol import CodecHeader
 
 BASE = {
-    "config_version": 1,
+    "config_version": 2,
     "instance": {"name": "rate-test"},
     "zello": {"channel": "C", "username": "u", "auth_token": "tok-abcdef"},
     "sound": {"input_device": "in", "output_device": "out"},

@@ -20,7 +20,7 @@ from zello_link.hardware.ptt import NullPtt, PttError, SafePtt
 from zello_link.hardware.supervisor import HardwareSupervisor
 
 BASE = {
-    "config_version": 1,
+    "config_version": 2,
     "instance": {"name": "recovery"},
     "zello": {"channel": "C", "username": "u", "auth_token": "tok-abcdef"},
     "sound": {"input_device": "in", "output_device": "out"},

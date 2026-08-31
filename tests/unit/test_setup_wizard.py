@@ -19,7 +19,7 @@ from zello_link.diagnostics.setup_wizard import (
 )
 
 SAMPLE = '''# leading comment
-config_version: 1
+config_version: 2
 
 sound:
   # which card the radio is plugged into
@@ -243,7 +243,7 @@ class TestAiocCosWarnings:
         from zello_link.config import load_config
 
         data = {
-            "config_version": 1,
+            "config_version": 2,
             "instance": {"name": "t"},
             "zello": {"channel": "c", "username": "u", "auth_token": "tok-abcdef"},
             "sound": {"input_device": "d", "output_device": "d"},
@@ -269,7 +269,7 @@ class TestAiocCosWarnings:
         from zello_link.config import load_config
 
         data = {
-            "config_version": 1,
+            "config_version": 2,
             "instance": {"name": "t"},
             "zello": {"channel": "c", "username": "u", "auth_token": "tok-abcdef"},
             "sound": {"input_device": "d", "output_device": "d"},
