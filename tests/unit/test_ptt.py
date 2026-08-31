@@ -208,16 +208,27 @@ class TestTransmitWatchdog:
 
 
 class TestCm108Report:
-    """The HID layout is bench-unverified, so its logic is pinned by tests."""
+    """Byte offsets per AllStarLink chan_simpleusb: data at 1, direction at 2.
 
-    def test_key_sets_the_gpio_bit(self):
+    Regression: these were previously 2 and 3. Everything then went into the
+    direction register while the data register stayed zero, so no GPIO ever
+    asserted -- a Digirig Lite accepted every write and never lit its PTT LED.
+    """
+
+    def test_key_sets_the_gpio_bit_in_the_data_byte(self):
         r = Cm108Report(gpio_pin=3)
-        assert r.build(True) == bytes([0x00, 0x00, 0b100, 0b100])
+        #        unused  data    direction  unused
+        assert r.build(True) == bytes([0x00, 0b100, 0b100, 0x00])
 
-    def test_unkey_clears_data_but_keeps_mask(self):
+    def test_unkey_clears_data_but_keeps_the_pin_an_output(self):
         """The line is driven low, not floated."""
         r = Cm108Report(gpio_pin=3)
-        assert r.build(False) == bytes([0x00, 0x00, 0x00, 0b100])
+        assert r.build(False) == bytes([0x00, 0x00, 0b100, 0x00])
+
+    def test_data_never_lands_in_the_direction_byte(self):
+        r = Cm108Report(gpio_pin=3)
+        assert r.build(True)[2] == r.build(False)[2], "direction is state-independent"
+        assert r.build(True)[1] != r.build(False)[1], "data must carry the state"
 
     @pytest.mark.parametrize("pin,bit", [(1, 0b1), (2, 0b10), (3, 0b100), (4, 0b1000)])
     def test_pin_to_bit_mapping_is_one_based(self, pin, bit):

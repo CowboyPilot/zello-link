@@ -156,13 +156,13 @@ class TestCm108GpioPin:
         ptt = Cm108HidPtt(None, gpio_pin=pin)
         ptt._dev = FakeHid()
         ptt.key()
-        # Byte 0 is hidapi's report ID, so the report starts at index 1 and
-        # its data/mask bytes land at 3 and 4.
+        # Byte 0 is hidapi's report ID, so the 4-byte report starts at index
+        # 1: data at 2, direction at 3.
         payload = ptt._dev.writes[-1]
         bit = 1 << (pin - 1)
-        assert payload[3] & bit, "selected GPIO must be driven high"
-        assert payload[3] == bit, "no other GPIO may be driven high"
-        assert payload[4] & bit, "the mask must claim the pin"
+        assert payload[2] & bit, "selected GPIO must be driven high"
+        assert payload[2] == bit, "no other GPIO may be driven high"
+        assert payload[3] & bit, "the pin must be configured as an output"
 
     def test_unkey_clears_the_pin_but_keeps_the_mask(self):
         """Releasing the mask would float the line rather than hold it low."""
@@ -170,8 +170,8 @@ class TestCm108GpioPin:
         ptt._dev = FakeHid()
         ptt.unkey()
         payload = ptt._dev.writes[-1]
-        assert payload[3] & 0b100 == 0
-        assert payload[4] & 0b100, "mask must still drive the pin low"
+        assert payload[2] & 0b100 == 0, "data bit must clear"
+        assert payload[3] & 0b100, "pin must stay an output so it is driven low"
 
     def test_use_before_open_is_refused(self):
         with pytest.raises(PttError, match="before open"):
@@ -397,21 +397,21 @@ class TestHidapiReportIdPrefix:
         p.key()
         assert p._dev.writes[-1][0] == 0x00
 
-    def test_key_matches_the_verified_bytes(self):
-        """Exactly what the hardware accepted on the bench."""
+    def test_key_matches_asl_layout(self):
+        """report-id, then unused, data, direction, unused."""
         p = self._ptt(gpio_pin=3)
         p.key()
-        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x00, 0x04, 0x04])
+        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x04, 0x04, 0x00])
 
-    def test_unkey_matches_the_verified_bytes(self):
+    def test_unkey_matches_asl_layout(self):
         p = self._ptt(gpio_pin=3)
         p.unkey()
-        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x00, 0x00, 0x04])
+        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x00, 0x04, 0x00])
 
     def test_gpio_4_shifts_the_bit_not_the_framing(self):
         p = self._ptt(gpio_pin=4)
         p.key()
-        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x00, 0x08, 0x08])
+        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x08, 0x08, 0x00])
 
     def test_negative_return_is_reported_with_context(self):
         from zello_link.hardware.aioc_hid import Cm108HidPtt

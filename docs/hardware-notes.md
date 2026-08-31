@@ -10,7 +10,8 @@ this file records what the hardware did.
 |---|---|
 | Serial PTT (DTR) — AIOC | **verified** on macOS and Linux |
 | Serial PTT (RTS) — Digirig Mobile | implemented, **no hardware tested** |
-| CM108 HID PTT (GPIO 3 output report) | **verified on Linux** — radio keyed |
+| CM108 HID PTT (GPIO 3 output report) | **verified on Linux** — Digirig Lite |
+| Digirig Lite (C-Media `0d8c:0012`) | **verified** — auto-detected, keys correctly |
 | CM108 HID COS (`aioc_virtual` / `aioc_hardware`) | **does not work on the AIOC** — see below |
 | Audio-level COS (`internal_audio`) | **verified**, and what the bench runs |
 | USRP backend | **verified** end to end against ASL3 |
@@ -52,6 +53,68 @@ whatever the AIOC is configured for.
 An earlier implementation read **byte 2** — the *output* report's GPIO data
 byte — against an *input* report, and treated the bit as a 1-8 GPIO pin.
 Wrong byte and wrong bit, both silent.
+
+## The CM108 output report: two things that must both be right
+
+Verified against a Digirig Lite, and cross-checked with AllStarLink's
+`chan_simpleusb.c`, which is the reference implementation for these devices.
+
+**Byte offsets.** The 4-byte report is:
+
+```
+byte 0  unused      (0x00)
+byte 1  GPIO data       bit N-1 set = GPIO N driven high
+byte 2  GPIO direction  bit N-1 set = GPIO N is an output
+byte 3  unused      (0x00)
+```
+
+ASL uses `hid_gpio_loc = 1` and `hid_gpio_ctl_loc = 2`, with `hid_io_ptt = 4`
+(GPIO 3) and `hid_gpio_ctl = 0x04` to make that pin an output. Direction is
+set for **both** key and unkey: releasing PTT must drive the line low rather
+than float it.
+
+This project originally had data at byte 2 and a "mask" at byte 3 — off by
+one, so every value went into the direction register while the data register
+stayed zero. The pin was correctly configured as an output and then never
+driven.
+
+**hidapi framing.** `hid.write()` takes the report ID as its first byte,
+ahead of the report. These devices declare no report IDs, so it is `0x00`
+followed by the four bytes above. Measured on the Digirig Lite:
+
+```
+4-byte  [00 00 00 04]      -> -1   (rejected)
+5-byte  [00 00 00 00 04]   ->  5   (accepted)
+```
+
+So the correct key sequence is `00 00 04 04 00` and unkey is `00 00 00 04 00`.
+
+### Why the AIOC appeared to work with the wrong layout
+
+An early test wrote the 4-byte report to `/dev/hidraw0` directly and the
+radio keyed. `hidraw` consumes the first byte of a write as the report
+number, which shifted the remaining bytes into the correct registers **by
+accident**. Through hidapi, with the report ID supplied properly, the same
+struct asserted nothing: the Digirig accepted every write and never lit its
+PTT LED. A passing test on one path is not verification of the layout.
+
+## Device paths are backend-specific — do not hardcode them
+
+`ptt.hid_device` and `cos.hid_device` should be left unset so the interface
+is auto-detected by USB id. A hand-written path only works on the backend it
+was copied from:
+
+| backend | path form |
+|---|---|
+| hidapi, hidraw build | `/dev/hidrawN` |
+| hidapi, libusb build | `1-1.4:1.3` |
+| macOS | `DevSrvsID:4295374066` |
+
+The `hidapi` wheel pip installs on Raspberry Pi OS is the **libusb** build,
+so `/dev/hidraw0` fails there with "open failed" — and once libusb claims the
+interface, writing to the hidraw node raises `EPIPE`. `CM108_DEVICE_IDS`
+covers the AIOC plus the C-Media CM108/CM108AH/CM119 ids; anything else still
+works with an explicit path.
 
 ## VCOS does not work on the AIOC (2026-08-31)
 
@@ -112,6 +175,18 @@ It did not re-enumerate on its own. Consequences worth knowing:
   refuses this now.
 - Ferrites on the USB cable are the mitigation.
 
+### The Digirig Lite does register an input node
+
+```
+input: C-Media Electronics Inc. USB Audio Device as .../input/input9
+hid-generic 0003:0D8C:0012.0008: input,hidraw0: USB HID v1.00 Device
+```
+
+Unlike the AIOC, whose descriptor has every `USAGE` set to `0x00`, this one
+declares real usages (`0xE9` Volume Up, `0xEA` Volume Down, `0xE2` Mute,
+Telephony `0x20` Hook Switch). If COS-over-HID is ever to be verified, this
+is the more promising device.
+
 ## Raspberry Pi Zero 2 W
 
 Software USB port resets **cannot** work: the port power rail is shared, so
@@ -130,3 +205,19 @@ macOS `DevSrvsID:...` values change on every re-enumeration; three different
 ids were seen for one AIOC within ten minutes. Leave `cos.hid_device` and
 `ptt.hid_device` unset so the device is auto-detected by VID:PID (`1209:7388`)
 unless more than one interface is present.
+
+## Bus-powered hubs on a Pi Zero 2 W are marginal
+
+The Pi Zero 2 W has a single micro-USB data port, so a USB-C interface such
+as the Digirig Lite needs a hub. A bus-powered one reports `bMaxPower:
+100mA`, and a CM108 that wedges will not re-enumerate on that rail:
+
+```
+usb 1-1.4: device not accepting address 7, error -32
+usb 1-1-port4: unable to enumerate USB device
+```
+
+The port then stays silent -- no further kernel events at all -- until the
+device is physically reconnected. Compare the kernel clock against the last
+USB log timestamp to tell "not replugged yet" from "replugged and failing".
+A powered hub avoids this.

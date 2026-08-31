@@ -78,20 +78,38 @@ CM108_DEVICE_IDS: dict[tuple[int, int], str] = {
 class Cm108Report:
     """Byte layout of the CM108 GPIO output report.
 
-    Conventional 4-byte report::
+    Four bytes, verified against AllStarLink's chan_simpleusb.c, which is
+    the reference implementation for these interfaces::
 
-        byte 0  report id   (0x00)
-        byte 1  unused      (0x00)
-        byte 2  GPIO data   bit N-1 set = GPIO N high
-        byte 3  GPIO mask   bit N-1 set = GPIO N is being driven
+        byte 0  unused      (0x00)
+        byte 1  GPIO data       bit N-1 set = GPIO N driven high
+        byte 2  GPIO direction  bit N-1 set = GPIO N is an output
+        byte 3  unused      (0x00)
+
+    ASL sets ``hid_gpio_loc = 1`` and ``hid_gpio_ctl_loc = 2``, with
+    ``hid_io_ptt = 4`` (GPIO 3) and ``hid_gpio_ctl = 0x04`` to make that pin
+    an output.
+
+    This was previously written with data at byte 2 and a "mask" at byte 3 --
+    off by one, so every value went into the direction register and the data
+    register stayed zero. It appeared to work exactly once, on an AIOC, via a
+    4-byte raw hidraw write: hidraw consumes the first byte as the report
+    number, which shifted the remaining bytes into the right places by
+    accident. Through hidapi, with the report id supplied properly, the same
+    struct asserted nothing at all -- a Digirig Lite accepted every write and
+    never lit its PTT LED.
 
     ``gpio_pin`` is 1-based to match the silkscreen and the datasheet.
     """
 
     gpio_pin: int = 3
     report_id: int = 0x00
-    data_index: int = 2
-    mask_index: int = 3
+    #: GPIO data register.
+    data_index: int = 1
+    #: GPIO direction register. Named "mask" historically; it selects which
+    #: pins are outputs, which is why it is set for both key and unkey --
+    #: releasing PTT must drive the line low, not float it.
+    mask_index: int = 2
     length: int = 4
 
     #: Input reports are NOT the output layout. The CM108 interrupt-IN report
