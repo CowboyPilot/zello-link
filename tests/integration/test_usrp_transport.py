@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 
 from zello_link.usrp.protocol import VOICE_BYTES, pack_signal, pack_voice
 from zello_link.usrp.transport import UsrpEvents, UsrpTransport
