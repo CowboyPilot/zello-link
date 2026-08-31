@@ -664,7 +664,7 @@ def render_asl_instructions(
 
        [{node}]
        rxchannel = USRP/{bind_host}:{bind_port}:{asl_port}
-       duplex = 0              ; no telemetry, no hangtime
+       duplex = 3              ; REQUIRED -- see the note below
        hangtime = 0
        tailmessagetime = 0
        nounkeyct = 1           ; no courtesy tone
@@ -676,6 +676,15 @@ def render_asl_instructions(
        remotect = |
        idtalkover = |
        idrecording = |
+
+   duplex = 3 is not a preference -- at duplex 0 or 1 the bridge can send
+   audio to ASL and the node will never key. chan_usrp's read function only
+   QUEUES arriving audio; the code that drains that queue and tells app_rpt
+   a transmission started lives in its WRITE function. So received audio is
+   only delivered while Asterisk is writing to the channel, and on an idle
+   node with duplex 0 or 1 app_rpt never writes. The queue never drains and
+   nothing reaches the repeater. duplex = 3 keeps the channel written to,
+   without repeating received audio back out.
 
    The telemetry suppression matters: on a talkative node every courtesy
    tone and ID arrives at the bridge as a keyed transmission and is
@@ -699,6 +708,28 @@ def render_asl_instructions(
    Verify with:
        asterisk -rx "module show like chan_usrp"
        asterisk -rx "core show channels" | grep -i usrp
+       asterisk -rx "usrp show"
+
+   In "usrp show", Read counts datagrams the channel actually received and
+   Write counts those it sent. Read stuck at 0 while the bridge reports
+   packets sent means they never reached the socket -- see the firewall
+   note. Read climbing while Write stays 0 is the duplex problem above.
+
+4. Firewall -- only if the bridge runs on a DIFFERENT host
+
+   Prefer running the bridge ON the ASL machine over 127.0.0.1: chan_usrp
+   has no authentication or encryption, and loopback sidesteps both the
+   exposure and the firewall entirely.
+
+   If it must be remote, open the port. ASL3's firewalld zone permits
+   iax2 and echolink but NOT the USRP port, so datagrams are rejected
+   before any socket sees them -- tcpdump still shows them arriving,
+   because it taps ahead of netfilter, which makes this look convincingly
+   like a chan_usrp bug:
+
+       firewall-cmd --permanent --zone=allstarlink \
+           --add-port={asl_port}/udp
+       firewall-cmd --reload
 =======================================================================
 """
 

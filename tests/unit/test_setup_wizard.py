@@ -371,9 +371,39 @@ class TestAslInstructions:
     def test_suppresses_telemetry_in_the_stanza(self):
         """Courtesy tones would reach Zello as spurious transmissions."""
         t = self._text()
-        for setting in ("duplex = 0", "nounkeyct = 1", "telemdefault = 0",
+        for setting in ("duplex = 3", "nounkeyct = 1", "telemdefault = 0",
                         "idtime = 0", "unlinkedct = |", "linkunkeyct = |"):
             assert setting in t, f"missing {setting}"
+
+    def test_never_recommends_a_duplex_that_cannot_receive(self):
+        """Regression: this guidance said duplex = 0, which cannot work.
+
+        chan_usrp only queues received audio in its read function; the code
+        that drains the queue and signals app_rpt lives in its write
+        function. At duplex 0 or 1 an idle node never writes, so the queue
+        never drains and audio reaching ASL never keys the node. Verified on
+        a live ASL3 node: at duplex=0 usrp show read 201 packets with write 0
+        and the node never keyed; at duplex=3 the linked RF node transmitted.
+        """
+        t = self._text()
+        assert "duplex = 0" not in t
+        assert "duplex = 1" not in t
+
+    def test_explains_why_duplex_matters(self):
+        """A bare value invites someone to 'tidy' it back to 0."""
+        t = self._text()
+        assert "never key" in t
+        assert "WRITE function" in t or "write function" in t
+
+    def test_covers_the_firewall_for_a_remote_bridge(self):
+        """firewalld rejects the USRP port before any socket sees it.
+
+        tcpdump still shows the packets, because it taps ahead of netfilter,
+        so this presents as a chan_usrp bug rather than a firewall one.
+        """
+        t = self._text()
+        assert "firewall-cmd" in t
+        assert "tcpdump" in t
 
     def test_warns_about_one_rxchannel_per_node(self):
         t = self._text()
