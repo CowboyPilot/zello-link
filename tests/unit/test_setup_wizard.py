@@ -609,3 +609,79 @@ class TestFlowStyleRefusal:
             'bridge:\n  backend: "aioc"\n', "bridge", "backend", '"usrp"'
         )
         assert yaml.safe_load(out)["bridge"]["backend"] == "usrp"
+
+
+class TestInstructionsAreCopyPasteable:
+    """Config and command lines must sit at column 0.
+
+    These are meant to be selected and pasted straight into rpt.conf or a
+    shell. Indented for prose alignment, every pasted line arrives with
+    leading spaces -- which rpt.conf tolerates but makes a mess of, and which
+    a shell does not tolerate at all in a heredoc.
+    """
+
+    def _text(self, **kw):
+        from zello_link.diagnostics.setup_wizard import render_asl_instructions
+
+        return render_asl_instructions(
+            kw.get("bind_host", "127.0.0.1"), 34001, 32001, node=kw.get("node", 1998)
+        )
+
+    def _lines(self, **kw):
+        return self._text(**kw).splitlines()
+
+    def test_node_stanza_header_is_left_justified(self):
+        assert "[1998]" in self._lines()
+
+    def test_every_stanza_setting_is_left_justified(self):
+        lines = self._lines()
+        for key in ("rxchannel = ", "duplex = 3", "hangtime = 0", "nounkeyct = 1"):
+            matches = [ln for ln in lines if key in ln]
+            assert matches, f"{key!r} missing"
+            assert any(not ln.startswith(" ") for ln in matches), (
+                f"{key!r} only appears indented; pasting it would carry spaces"
+            )
+
+    def test_nodes_entry_is_present_and_left_justified(self):
+        """Without it the node number does not resolve and nothing works."""
+        line = "1998 = radio@127.0.0.1/1998,NONE"
+        assert line in self._lines()
+
+    def test_nodes_entry_comes_before_the_stanza(self):
+        """It lives near the top of rpt.conf; instructions should follow that."""
+        text = self._text()
+        assert text.index("radio@127.0.0.1") < text.index("[1998]")
+
+    def test_nodes_step_says_where_the_stanza_is(self):
+        text = self._text()
+        assert "[nodes]" in text
+        assert "TOP" in text or "top of the file" in text
+
+    def test_module_load_line_is_left_justified(self):
+        assert "load => chan_usrp.so" in self._lines()
+
+    def test_startup_macro_is_left_justified(self):
+        assert "startup_macro = *31998" in self._lines()
+
+    def test_shell_commands_are_left_justified(self):
+        lines = self._lines()
+        assert "systemctl restart asterisk" in lines
+        assert 'asterisk -rx "usrp show"' in lines
+
+    def test_firewall_command_is_one_runnable_line(self):
+        """Regression: a line continuation was mangled into a run of spaces.
+
+        The rendered text read "--zone=allstarlink            --add-port=..."
+        with the backslash consumed, which is not a command anybody can run.
+        """
+        lines = self._lines(bind_host="10.0.0.5")
+        cmd = [ln for ln in lines if ln.startswith("firewall-cmd --permanent")]
+        assert cmd, "firewall command missing or indented"
+        assert "--add-port=32001/udp" in cmd[0]
+        assert "  " not in cmd[0], f"stray whitespace run: {cmd[0]!r}"
+        assert "\\" not in cmd[0]
+
+    def test_prose_stays_indented_so_blocks_stand_out(self):
+        """Left-justifying everything would lose the visual separation."""
+        lines = self._lines()
+        assert any(ln.startswith("   ") and ln.strip() for ln in lines)

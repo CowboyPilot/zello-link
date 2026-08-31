@@ -644,33 +644,46 @@ def render_asl_instructions(
 1. /etc/asterisk/modules.conf
 
    chan_usrp is not loaded by default. Under [modules], make sure this
-   line is present and NOT commented out:
+   line is present and NOT commented out.
 
-       load => chan_usrp.so
+   Copy from the next line:
+
+load => chan_usrp.so
 
    ASL3 ships with autoload=no, so an absent or commented line means the
    module never loads and the channel silently will not exist.
 
-2. /etc/asterisk/rpt.conf
+2. /etc/asterisk/rpt.conf -- TWO edits
 
-   Add a node for the bridge. A node has exactly ONE rxchannel -- adding
-   a second line to an existing node does not give it two inputs, one
-   silently wins -- so this is its own node, linked to your RF node.
+   2a. Register the node. Near the TOP of the file there is a [nodes]
+       stanza; add this line inside it. Without it the node number is not
+       resolvable and the stanza below is never reached.
 
-       [{node}]
-       rxchannel = USRP/{bind_host}:{bind_port}:{asl_port}
-       duplex = 3              ; REQUIRED -- see the note below
-       hangtime = 0
-       tailmessagetime = 0
-       nounkeyct = 1           ; no courtesy tone
-       telemdefault = 0
-       idtime = 0              ; never send periodic IDs
-       politeid = 0
-       unlinkedct = |          ; suppress every courtesy tone
-       linkunkeyct = |
-       remotect = |
-       idtalkover = |
-       idrecording = |
+       Copy from the next line:
+
+{node} = radio@127.0.0.1/{node},NONE
+
+   2b. Add the node's own stanza. A node has exactly ONE rxchannel --
+       adding a second line to an existing node does not give it two
+       inputs, one silently wins -- so this is its own node, linked to
+       your RF node.
+
+       Copy from the next line:
+
+[{node}]
+rxchannel = USRP/{bind_host}:{bind_port}:{asl_port}
+duplex = 3              ; REQUIRED -- see the note below
+hangtime = 0
+tailmessagetime = 0
+nounkeyct = 1           ; no courtesy tone
+telemdefault = 0
+idtime = 0              ; never send periodic IDs
+politeid = 0
+unlinkedct = |          ; suppress every courtesy tone
+linkunkeyct = |
+remotect = |
+idtalkover = |
+idrecording = |
 
    duplex = 3 is not a preference -- at duplex 0 or 1 the bridge can send
    audio to ASL and the node will never key. chan_usrp's read function only
@@ -685,25 +698,25 @@ def render_asl_instructions(
    tone and ID arrives at the bridge as a keyed transmission and is
    relayed to Zello as a spurious over.
 
-   Register it in the [nodes] stanza too:
-
-       {node} = radio@127.0.0.1/{node},NONE
-
 3. Link it to your RF node
 
-   On the RF node's stanza, connect at startup:
+   On the RF node's stanza, connect at startup -- without this the link
+   does not survive an Asterisk restart, and audio stops with no error.
 
-       startup_macro = *3{node}
+   Copy from the next line:
+
+startup_macro = *3{node}
 
    Then restart Asterisk -- an rxchannel change needs a restart, not a
    reload:
 
-       systemctl restart asterisk
+systemctl restart asterisk
 
    Verify with:
-       asterisk -rx "module show like chan_usrp"
-       asterisk -rx "core show channels" | grep -i usrp
-       asterisk -rx "usrp show"
+
+asterisk -rx "module show like chan_usrp"
+asterisk -rx "core show channels" | grep -i usrp
+asterisk -rx "usrp show"
 
    In "usrp show", Read counts datagrams the channel actually received and
    Write counts those it sent. Read stuck at 0 while the bridge reports
@@ -722,9 +735,8 @@ def render_asl_instructions(
    because it taps ahead of netfilter, which makes this look convincingly
    like a chan_usrp bug:
 
-       firewall-cmd --permanent --zone=allstarlink \
-           --add-port={asl_port}/udp
-       firewall-cmd --reload
+firewall-cmd --permanent --zone=allstarlink --add-port={asl_port}/udp
+firewall-cmd --reload
 =======================================================================
 """
 
