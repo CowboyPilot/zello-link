@@ -13,7 +13,8 @@ this file records what the hardware did.
 | CM108 HID PTT (GPIO 3 output report) | **verified** — AIOC *and* Digirig Lite |
 | Digirig Lite (C-Media `0d8c:0012`) | **verified** — auto-detected, keys correctly |
 | AIOC CM108 HID PTT | **verified** with the corrected byte offsets |
-| CM108 HID COS (`aioc_virtual` / `aioc_hardware`) | **does not work on the AIOC** — see below |
+| CM108 HID COS (`aioc_hardware`) | **not yet verified** — needs a real COS wire |
+| AIOC firmware VCOS | **removed** — does not work on the hardware |
 | Audio-level COS (`internal_audio`) | **verified**, and what the bench runs |
 | USRP backend | **verified** end to end against ASL3 |
 
@@ -136,7 +137,28 @@ interface, writing to the hidraw node raises `EPIPE`. `CM108_DEVICE_IDS`
 covers the AIOC plus the C-Media CM108/CM108AH/CM119 ids; anything else still
 works with an explicit path.
 
-## VCOS does not work on the AIOC (2026-08-31)
+## VCOS removed; hardware COS kept as a future path (2026-08-31)
+
+`cos.mode: aioc_virtual` is **gone**. The AIOC's firmware VCOS does not work
+(evidence below), and it was a corner case even if it had: audio-level COS is
+the more consistent path across every interface, and it is what the bench and
+the live repeater both run.
+
+`cos.mode: aioc_hardware` **remains, flagged unverified.** It is for a real
+COS wire brought into the interface and reported as a CM108 button press --
+a RIM-style adapter, or an AIOC with the COS pad soldered. Nothing here has
+produced a HID input report yet, so `--validate` warns and the setup wizard
+labels it UNVERIFIED rather than offering it as an equal option.
+
+The eventual goal that keeps this path open: talking to an RF interface
+directly, bypassing Asterisk, on a node where hardware COS comes through the
+interface. The repeater currently running the soak has exactly that (a RIM
+Lite USB), but Asterisk is handling COS there today.
+
+Setting the removed mode raises a migration error naming the reason, rather
+than a bare "not a permitted value".
+
+## Why VCOS was removed
 
 Not one HID input report was ever observed, across:
 

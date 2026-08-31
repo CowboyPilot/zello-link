@@ -201,7 +201,7 @@ def create_cos_backend(cfg: Any) -> CosBackend:
     mode = cfg.cos.mode
     if mode == "internal_audio":
         return InternalAudioCos(cfg)
-    if mode in ("aioc_virtual", "aioc_hardware"):
+    if mode == "aioc_hardware":
         return AiocCos(cfg)
     if mode == "disabled":
         return DisabledCos()

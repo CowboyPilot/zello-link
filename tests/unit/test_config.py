@@ -257,7 +257,7 @@ class TestRequiredCombinations:
 
     def test_aioc_cos_needs_hid_device(self, tmp_path):
         with pytest.raises(ConfigError, match="hid_device"):
-            load_config(write_cfg(tmp_path, {"cos": {"mode": "aioc_virtual"}}))
+            load_config(write_cfg(tmp_path, {"cos": {"mode": "aioc_hardware"}}))
 
     def test_rf_to_zello_with_cos_disabled_rejected(self, tmp_path):
         with pytest.raises(ConfigError, match="no way to detect"):

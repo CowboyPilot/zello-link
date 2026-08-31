@@ -265,7 +265,7 @@ async def _diagnose_aioc(cfg: Any, *, ptt_test: bool) -> int:
     # COS over HID either works or fails silently: poll() keeps returning the
     # last known state, so a bridge that can never hear the radio looks
     # perfectly healthy. Prove input reports actually arrive.
-    if cfg.cos.mode in ("aioc_virtual", "aioc_hardware"):
+    if cfg.cos.mode == "aioc_hardware":
         print()
         for line in await _probe_hid_input(cfg):
             print(line)

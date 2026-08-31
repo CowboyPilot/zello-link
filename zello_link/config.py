@@ -293,7 +293,15 @@ class PttConfig(_Model):
 
 
 class CosConfig(_Model):
-    mode: Literal["internal_audio", "aioc_virtual", "aioc_hardware", "disabled"] = "internal_audio"
+    # aioc_virtual (the AIOC's firmware VCOS) was removed: it does not work
+    # on the hardware. No HID input report was ever produced by two AIOCs on
+    # two operating systems, and the VCOS registers were confirmed not to
+    # change on the device itself. See docs/hardware-notes.md.
+    #
+    # aioc_hardware remains for a real COS wire brought into the interface --
+    # a RIM-style adapter, or an AIOC with the COS pad soldered. It is NOT
+    # yet verified on hardware; --validate says so.
+    mode: Literal["internal_audio", "aioc_hardware", "disabled"] = "internal_audio"
     hid_device: str | None = None
 
     # internal_audio only.
@@ -315,23 +323,42 @@ class CosConfig(_Model):
     # AIOC-programmed values. Used only when configuring the device; the
     # AIOC's own COS indication stays authoritative at runtime, so no second
     # software hang is applied on top of these.
-    # Which CM108 button the AIOC maps VCOS onto, for cos.mode='aioc_virtual'
-    # and 'aioc_hardware'. COS arrives as a button press in byte 0 of the HID
-    # input report, not as a GPIO level, and the mapping is set in the AIOC's
-    # own "CM108 Button Sources" panel -- it cannot be discovered, so it has
-    # to be told to us. 2 (VOL DOWN) matches the AIOC's usual VCOS routing.
+    # Which CM108 button carries COS, for cos.mode='aioc_hardware'. It
+    # arrives as a button press in byte 0 of the HID input report, not as a
+    # GPIO level. Which button depends on how the interface is wired and
+    # cannot be discovered, so it has to be told to us.
     hid_button: int = Field(default=2, ge=1, le=4)
 
     configure_aioc_on_start: bool = False
     aioc_threshold: int | None = None
     aioc_hang_ms: int = Field(default=450, ge=0, le=5000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_modes(cls, data: Any) -> Any:
+        """Name the removed mode instead of listing the permitted ones.
+
+        A bare Literal error tells someone their value is invalid but not why
+        it disappeared, and this one disappeared for a reason worth stating.
+        """
+        if isinstance(data, dict) and data.get("mode") == "aioc_virtual":
+            raise ValueError(
+                "cos.mode='aioc_virtual' has been removed. The AIOC's firmware "
+                "VCOS does not work: no HID input report was produced by two "
+                "units on two operating systems, and the VCOS registers were "
+                "confirmed not to change on the device itself. Use "
+                "cos.mode='internal_audio', which works on every interface. "
+                "For a real COS wire into the interface, see 'aioc_hardware' "
+                "-- not yet verified on hardware."
+            )
+        return data
+
     @model_validator(mode="after")
     def _check(self) -> "CosConfig":
-        if self.mode in ("aioc_virtual", "aioc_hardware") and not self.hid_device:
-            raise ValueError(f"cos.hid_device is required when cos.mode='{self.mode}'")
-        if self.configure_aioc_on_start and self.mode not in ("aioc_virtual", "aioc_hardware"):
-            raise ValueError("cos.configure_aioc_on_start requires an AIOC COS mode")
+        if self.mode == "aioc_hardware" and not self.hid_device:
+            raise ValueError("cos.hid_device is required when cos.mode='aioc_hardware'")
+        if self.configure_aioc_on_start and self.mode != "aioc_hardware":
+            raise ValueError("cos.configure_aioc_on_start requires cos.mode='aioc_hardware'")
         return self
 
 
@@ -587,17 +614,16 @@ class BridgeConfig(_Model):
         """Non-fatal advisories, surfaced by --validate and at startup."""
         out: list[str] = []
 
-        if self.cos.mode in ("aioc_virtual", "aioc_hardware"):
+        if self.cos.mode == "aioc_hardware":
             out.append(
-                f"cos.mode={self.cos.mode!r} has never been seen to work on AIOC "
-                "hardware. The byte layout matches the device's own HID report "
+                "cos.mode='aioc_hardware' is NOT yet verified on hardware. It "
+                "needs a real COS wire brought into the interface (a RIM-style "
+                "adapter, or an AIOC with the COS pad soldered) and reported as a "
+                "CM108 button press. The byte layout matches the CM108 report "
                 "descriptor and HID PTT on the same interface is verified, but no "
-                "input report was ever observed: two units (one on latest "
-                "firmware), macOS and Linux, hidapi and raw /dev/hidraw0, VCOS "
-                "thresholds 256 down to 50, with confirmed squelch activity -- and "
-                "the VCOS registers were then confirmed not to change on the device "
-                "itself. Prefer cos.mode='internal_audio'. See "
-                "docs/hardware-notes.md."
+                "HID input report has been observed from any device here. "
+                "cos.mode='internal_audio' is the proven path and works on every "
+                "interface. See docs/hardware-notes.md."
             )
 
         if self.bridge.backend == "usrp":

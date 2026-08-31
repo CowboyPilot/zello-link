@@ -263,22 +263,17 @@ def detect_cos_choices() -> list[Choice]:
         hid_error = str(e).splitlines()[0]
 
     if hid_paths:
-        where = f"{len(hid_paths)} AIOC HID device(s) found"
-        choices.append(
-            Choice("aioc_virtual", "aioc_virtual    - AIOC firmware VCOS", where)
-        )
         choices.append(
             Choice(
                 "aioc_hardware",
-                "aioc_hardware   - AIOC external hardware input",
-                "needs a COS wire from the radio; a 2-pin K1 has none",
+                "aioc_hardware   - COS wire into the interface  (UNVERIFIED)",
+                "needs a real COS connection: a RIM-style adapter, or an AIOC "
+                "with the COS pad soldered. Not yet proven on hardware.",
             )
         )
     else:
-        note = hid_error or "no AIOC HID interface detected"
-        choices.append(
-            Choice(None, "aioc_virtual / aioc_hardware  (unavailable)", note)
-        )
+        note = hid_error or "no CM108-class HID interface detected"
+        choices.append(Choice(None, "aioc_hardware  (unavailable)", note))
 
     choices.append(
         Choice("disabled", "disabled        - never report RX", "receive-only bridges")
@@ -287,16 +282,16 @@ def detect_cos_choices() -> list[Choice]:
 
 
 def _prompt_hid_device(current: Any) -> str:
-    """Pick the AIOC HID interface that carries COS."""
+    """Pick the CM108-class HID interface that carries COS."""
     try:
-        from ..hardware.aioc_hid import find_aioc_hid_path
+        from ..hardware.aioc_hid import find_cm108_hid_devices
 
-        paths = find_aioc_hid_path()
+        paths = [d["path"] for d in find_cm108_hid_devices()]
     except Exception as e:
         raise SelectionAborted(f"cannot enumerate HID devices: {e}") from None
 
     if not paths:
-        raise SelectionAborted("no AIOC HID device found")
+        raise SelectionAborted("no CM108-class HID interface found")
 
     if len(paths) == 1:
         print(f"\n  Using the only AIOC HID device found: {paths[0]}", file=sys.stderr)

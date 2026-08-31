@@ -238,7 +238,7 @@ class TestHidCosWiring:
             "zello": {"channel": "C", "username": "u", "auth_token": "tok-abcdef"},
             "sound": {"input_device": "in", "output_device": "out"},
             "ptt": {"mode": "none"},
-            "cos": {"mode": "aioc_virtual", "hid_device": "/dev/hidraw0",
+            "cos": {"mode": "aioc_hardware", "hid_device": "/dev/hidraw0",
                     "hid_button": 3},
             "logging": {"console": False, "file": None},
         }

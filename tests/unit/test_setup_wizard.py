@@ -150,13 +150,31 @@ class TestCosChoices:
         for c in detect_cos_choices():
             assert c.label
 
-    def test_aioc_options_depend_on_detection(self, monkeypatch):
+    def test_hardware_cos_offered_when_an_interface_is_present(self, monkeypatch):
         import zello_link.hardware.aioc_hid as hid
 
         monkeypatch.setattr(hid, "find_aioc_hid_path", lambda **kw: ["/dev/hidraw0"])
         values = [c.value for c in detect_cos_choices()]
-        assert "aioc_virtual" in values
         assert "aioc_hardware" in values
+
+    def test_vcos_is_not_offered_at_all(self, monkeypatch):
+        """It was removed: the AIOC's firmware VCOS does not work."""
+        import zello_link.hardware.aioc_hid as hid
+
+        monkeypatch.setattr(hid, "find_aioc_hid_path", lambda **kw: ["/dev/hidraw0"])
+        choices = detect_cos_choices()
+        assert not any(c.value == "aioc_virtual" for c in choices)
+        assert "aioc_virtual" not in " ".join(c.label for c in choices)
+
+    def test_hardware_cos_is_labelled_unverified(self, monkeypatch):
+        """Offering it silently would imply it has been proven. It has not."""
+        import zello_link.hardware.aioc_hid as hid
+
+        monkeypatch.setattr(hid, "find_aioc_hid_path", lambda **kw: ["/dev/hidraw0"])
+        text = " ".join(
+            f"{c.label} {c.note}" for c in detect_cos_choices()
+        ).upper()
+        assert "UNVERIFIED" in text
 
     def test_aioc_marked_unavailable_without_hardware(self, monkeypatch):
         import zello_link.hardware.aioc_hid as hid
@@ -235,7 +253,7 @@ class TestInsertMissingKey:
 
 
 class TestAiocCosWarnings:
-    """Choosing an AIOC COS mode must say it has never worked on real hardware."""
+    """Choosing hardware COS must say it is not yet verified."""
 
     def _warnings(self, tmp_path, mode):
         import yaml
@@ -254,28 +272,33 @@ class TestAiocCosWarnings:
         p.write_text(yaml.safe_dump(data))
         return load_config(p).warnings()
 
-    def test_virtual_warns_it_has_never_worked(self, tmp_path):
-        ws = self._warnings(tmp_path, "aioc_virtual")
-        assert any("never been seen to work" in w for w in ws)
-
-    def test_hardware_warns_it_has_never_worked(self, tmp_path):
+    def test_hardware_cos_warns_it_is_unverified(self, tmp_path):
         ws = self._warnings(tmp_path, "aioc_hardware")
-        assert any("never been seen to work" in w for w in ws)
+        assert any("NOT yet verified" in w for w in ws)
 
     def test_warning_points_at_the_working_alternative(self, tmp_path):
         """A warning that does not say what to do instead is half a warning."""
-        ws = self._warnings(tmp_path, "aioc_virtual")
+        ws = self._warnings(tmp_path, "aioc_hardware")
         assert any("internal_audio" in w for w in ws)
 
     def test_warning_does_not_blame_the_byte_layout(self, tmp_path):
         """Regression: the layout IS verified against the report descriptor.
 
         Blaming it would send the next person to debug Cm108Report, which is
-        correct, instead of the AIOC's VCOS, which is what actually fails.
+        correct, instead of the missing COS wire, which is the real gap.
         """
-        ws = self._warnings(tmp_path, "aioc_virtual")
+        ws = self._warnings(tmp_path, "aioc_hardware")
         assert not any("not published" in w for w in ws)
-        assert any("matches the device" in w for w in ws)
+        assert any("matches the CM108 report descriptor" in w for w in ws)
+
+    def test_vcos_config_is_rejected_with_an_explanation(self, tmp_path):
+        """A bare Literal error would not say why the mode disappeared."""
+        import pytest as _pytest
+
+        from zello_link.config import ConfigError
+
+        with _pytest.raises(ConfigError, match="has been removed"):
+            self._warnings(tmp_path, "aioc_virtual")
 
     def test_internal_audio_is_not_warned_about(self, tmp_path):
         ws = self._warnings(tmp_path, "internal_audio")
