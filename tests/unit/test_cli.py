@@ -28,9 +28,28 @@ def cfg_path(tmp_path):
 
 
 class TestParser:
-    def test_config_is_required(self):
-        with pytest.raises(SystemExit):
-            build_parser().parse_args([])
+    def test_config_is_reported_missing_rather_than_crashing(self):
+        """--config is no longer argparse-required, because --setup creates one.
+
+        It is still required for every other mode; main() says so plainly
+        instead of argparse rejecting --setup for lacking a file it exists to
+        write.
+        """
+        from zello_link.cli import EXIT_CONFIG, main
+
+        assert build_parser().parse_args([]).config is None
+        assert main([]) == EXIT_CONFIG
+
+    def test_setup_is_a_real_flag(self):
+        args = build_parser().parse_args(["--setup"])
+        assert args.setup is True
+        assert args.config is None
+
+    def test_setup_dir_is_optional(self):
+        assert build_parser().parse_args(["--setup"]).setup_dir is None
+        assert build_parser().parse_args(
+            ["--setup", "--setup-dir", "/tmp/x"]
+        ).setup_dir == "/tmp/x"
 
     def test_diagnostic_modes_are_mutually_exclusive(self):
         with pytest.raises(SystemExit):

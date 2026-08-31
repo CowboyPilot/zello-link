@@ -38,7 +38,19 @@ def build_parser() -> argparse.ArgumentParser:
         prog="zello-link",
         description="Bridge a Zello channel to a radio through a CM108-class USB interface.",
     )
-    p.add_argument("--config", required=True, metavar="PATH", help="YAML configuration file")
+    p.add_argument(
+        "--config", metavar="PATH",
+        help="YAML configuration file (not required with --setup)",
+    )
+    p.add_argument(
+        "--setup", action="store_true",
+        help="interactively create a config, credentials file, virtualenv and "
+             "launch script from scratch, then exit",
+    )
+    p.add_argument(
+        "--setup-dir", metavar="PATH",
+        help="with --setup: directory to write into (default: current directory)",
+    )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     modes = p.add_argument_group("diagnostic modes (mutually exclusive)")
@@ -78,6 +90,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # --setup runs before any config is loaded: its whole purpose is that no
+    # config exists yet.
+    if args.setup:
+        from .diagnostics.config_wizard import run_config_wizard
+
+        return run_config_wizard(args.setup_dir)
+
+    if not args.config:
+        print(
+            "--config is required (or use --setup to create one)", file=sys.stderr
+        )
+        return EXIT_CONFIG
 
     try:
         cfg = load_config(args.config)
