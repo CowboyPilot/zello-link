@@ -156,11 +156,13 @@ class TestCm108GpioPin:
         ptt = Cm108HidPtt(None, gpio_pin=pin)
         ptt._dev = FakeHid()
         ptt.key()
+        # Byte 0 is hidapi's report ID, so the report starts at index 1 and
+        # its data/mask bytes land at 3 and 4.
         payload = ptt._dev.writes[-1]
         bit = 1 << (pin - 1)
-        assert payload[2] & bit, "selected GPIO must be driven high"
-        assert payload[2] == bit, "no other GPIO may be driven high"
-        assert payload[3] & bit, "the mask must claim the pin"
+        assert payload[3] & bit, "selected GPIO must be driven high"
+        assert payload[3] == bit, "no other GPIO may be driven high"
+        assert payload[4] & bit, "the mask must claim the pin"
 
     def test_unkey_clears_the_pin_but_keeps_the_mask(self):
         """Releasing the mask would float the line rather than hold it low."""
@@ -168,8 +170,8 @@ class TestCm108GpioPin:
         ptt._dev = FakeHid()
         ptt.unkey()
         payload = ptt._dev.writes[-1]
-        assert payload[2] & 0b100 == 0
-        assert payload[3] & 0b100, "mask must still drive the pin low"
+        assert payload[3] & 0b100 == 0
+        assert payload[4] & 0b100, "mask must still drive the pin low"
 
     def test_use_before_open_is_refused(self):
         with pytest.raises(PttError, match="before open"):
@@ -359,3 +361,86 @@ class TestDeviceNodeGuard:
         from zello_link.hardware.aioc_hid import _check_device_node
 
         _check_device_node("/dev/null")        # char device on every unix
+
+
+class TestHidapiReportIdPrefix:
+    """hidapi takes the report ID as the first byte of write().
+
+    CM108 devices declare no report IDs, so it is zero and the 4-byte GPIO
+    report follows. Measured on a Digirig Lite (C-Media 0d8c:0012): a 4-byte
+    write returns -1, the 5-byte form returns 5. Without this the interface
+    opens fine and then every key and unkey silently fails.
+    """
+
+    def _ptt(self, **kw):
+        from zello_link.hardware.aioc_hid import Cm108HidPtt
+
+        class Dev:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, buf):
+                self.writes.append(bytes(buf))
+                return len(buf)
+
+        p = Cm108HidPtt(None, **kw)
+        p._dev = Dev()
+        return p
+
+    def test_write_is_five_bytes(self):
+        p = self._ptt()
+        p.key()
+        assert len(p._dev.writes[-1]) == 5
+
+    def test_first_byte_is_the_report_id(self):
+        p = self._ptt()
+        p.key()
+        assert p._dev.writes[-1][0] == 0x00
+
+    def test_key_matches_the_verified_bytes(self):
+        """Exactly what the hardware accepted on the bench."""
+        p = self._ptt(gpio_pin=3)
+        p.key()
+        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x00, 0x04, 0x04])
+
+    def test_unkey_matches_the_verified_bytes(self):
+        p = self._ptt(gpio_pin=3)
+        p.unkey()
+        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x00, 0x00, 0x04])
+
+    def test_gpio_4_shifts_the_bit_not_the_framing(self):
+        p = self._ptt(gpio_pin=4)
+        p.key()
+        assert p._dev.writes[-1] == bytes([0x00, 0x00, 0x00, 0x08, 0x08])
+
+    def test_negative_return_is_reported_with_context(self):
+        from zello_link.hardware.aioc_hid import Cm108HidPtt
+
+        class BadDev:
+            def write(self, buf):
+                return -1
+
+        p = Cm108HidPtt(None)
+        p._dev = BadDev()
+        with pytest.raises(PttError, match="returned -1"):
+            p.key()
+
+
+class TestCm108DeviceTable:
+    """Auto-detection covers the common interfaces so no path is needed.
+
+    A hand-written path is backend-specific: hidapi's hidraw build wants
+    /dev/hidrawN, its libusb build a bus id like "1-1.4:1.3", macOS
+    "DevSrvsID:...". Copying one between hosts produces "open failed".
+    """
+
+    def test_aioc_and_digirig_lite_are_both_known(self):
+        from zello_link.hardware.aioc_hid import CM108_DEVICE_IDS
+
+        assert (0x1209, 0x7388) in CM108_DEVICE_IDS      # AIOC
+        assert (0x0D8C, 0x0012) in CM108_DEVICE_IDS      # Digirig Lite
+
+    def test_every_entry_is_named(self):
+        from zello_link.hardware.aioc_hid import CM108_DEVICE_IDS
+
+        assert all(v and isinstance(v, str) for v in CM108_DEVICE_IDS.values())

@@ -241,9 +241,19 @@ class TestRequiredCombinations:
         with pytest.raises(ConfigError, match="tty_device"):
             load_config(write_cfg(tmp_path, drop=["ptt.tty_device"]))
 
-    def test_hid_ptt_needs_hid_device(self, tmp_path):
-        with pytest.raises(ConfigError, match="hid_device"):
-            load_config(write_cfg(tmp_path, {"ptt": {"mode": "cm108_hid"}}))
+    def test_hid_ptt_may_omit_the_device_path(self, tmp_path):
+        """Auto-detection by USB id is the better default.
+
+        A hand-written path is backend-specific: hidapi's hidraw build wants
+        /dev/hidrawN, its libusb build wants a bus id like "1-1.4:1.3", and
+        macOS wants "DevSrvsID:...". Copying a path between hosts -- or even
+        between hidapi builds on one host -- produces "open failed", which is
+        exactly what a Digirig Lite on a Pi did. Asking hidapi gets the right
+        form every time.
+        """
+        cfg = load_config(write_cfg(tmp_path, {"ptt": {"mode": "cm108_hid"}}))
+        assert cfg.ptt.hid_device is None
+        assert cfg.ptt.mode == "cm108_hid"
 
     def test_aioc_cos_needs_hid_device(self, tmp_path):
         with pytest.raises(ConfigError, match="hid_device"):

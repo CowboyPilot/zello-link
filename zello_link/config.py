@@ -547,8 +547,12 @@ class BridgeConfig(_Model):
                 raise ValueError("bridge.zello_to_rf requires sound.output_device")
             if self.ptt.mode == "serial" and not self.ptt.tty_device:
                 raise ValueError("ptt.tty_device is required when ptt.mode='serial'")
-            if self.ptt.mode == "cm108_hid" and not self.ptt.hid_device:
-                raise ValueError("ptt.hid_device is required when ptt.mode='cm108_hid'")
+            # ptt.hid_device may be omitted: the CM108 interface is then
+            # auto-detected by USB id. That is the better default, because a
+            # hand-written path is backend-specific -- hidapi's hidraw build
+            # wants /dev/hidrawN, its libusb build wants a bus id like
+            # "1-1.4:1.3", and macOS wants "DevSrvsID:...". Auto-detection
+            # asks hidapi and gets the right form every time.
 
         if self.bridge.backend == "usrp":
             # USRP carries no authentication or encryption whatsoever, so

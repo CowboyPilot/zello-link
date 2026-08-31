@@ -32,7 +32,16 @@ from typing import Any
 
 from .ptt import PttBackend, PttError
 
-__all__ = ["AIOC_VID", "AIOC_PID", "Cm108Report", "Cm108HidPtt", "HidCos", "find_aioc_hid_path"]
+__all__ = [
+    "AIOC_VID",
+    "AIOC_PID",
+    "CM108_DEVICE_IDS",
+    "Cm108Report",
+    "Cm108HidPtt",
+    "HidCos",
+    "find_aioc_hid_path",
+    "find_cm108_hid_devices",
+]
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +49,29 @@ log = logging.getLogger(__name__)
 #: How long to wait before concluding that input reports are never coming.
 _SILENT_HID_WARN_S = 10.0
 
+#: hidapi prefixes every write with a report ID. CM108-class devices declare
+#: no report IDs, so it is always zero.
+_HIDAPI_REPORT_ID = b"\x00"
+
 AIOC_VID = 0x1209
 AIOC_PID = 0x7388
+
+#: CM108-class interfaces this project knows by sight. They all speak the
+#: same 4-byte GPIO output report, so supporting one is supporting all of
+#: them -- what differs is only the USB id and which GPIO is wired to PTT.
+#:
+#: An id missing from this table is not unsupported: set ptt.hid_device
+#: explicitly and it will work. The table exists so the common cases need no
+#: configuration at all.
+CM108_DEVICE_IDS: dict[tuple[int, int], str] = {
+    (0x1209, 0x7388): "AIOC All-In-One-Cable",
+    (0x0D8C, 0x0012): "C-Media CM108 (Digirig Lite, generic USB sound)",
+    (0x0D8C, 0x000C): "C-Media CM108",
+    (0x0D8C, 0x000E): "C-Media CM108",
+    (0x0D8C, 0x013C): "C-Media CM108AH",
+    (0x0D8C, 0x0013): "C-Media CM119",
+    (0x0D8C, 0x0014): "C-Media CM119A",
+}
 
 
 @dataclass(frozen=True)
@@ -130,15 +160,47 @@ def _import_hid() -> Any:
     return hid
 
 
+def find_cm108_hid_devices() -> list[dict[str, Any]]:
+    """Every attached interface this project recognises as CM108-class.
+
+    Each entry is ``{path, vid, pid, name, product}``. ``path`` is whatever
+    form hidapi wants back: the hidraw backend gives "/dev/hidrawN", the
+    libusb backend gives a bus id like "1-1.4:1.3", and macOS gives
+    "DevSrvsID:...". Auto-detection therefore works on any backend, while a
+    hand-written path only works on the one it was copied from.
+    """
+    hid = _import_hid()
+    found: list[dict[str, Any]] = []
+    try:
+        for d in hid.enumerate():
+            key = (d.get("vendor_id", 0), d.get("product_id", 0))
+            if key not in CM108_DEVICE_IDS:
+                continue
+            path = d["path"]
+            found.append({
+                "path": path.decode(errors="replace") if isinstance(path, bytes) else path,
+                "vid": key[0],
+                "pid": key[1],
+                "name": CM108_DEVICE_IDS[key],
+                "product": d.get("product_string") or "",
+            })
+    except Exception as e:
+        raise PttError(f"cannot enumerate HID devices: {e}") from e
+    return found
+
+
 def find_aioc_hid_path(*, vid: int = AIOC_VID, pid: int = AIOC_PID) -> list[str]:
-    """Enumerate AIOC HID device paths.
+    """Enumerate HID paths for one specific USB id.
 
     Returns every match so a multi-interface host can be told to disambiguate
     rather than being handed an arbitrary one.
     """
     hid = _import_hid()
     try:
-        return [d["path"].decode() for d in hid.enumerate(vid, pid)]
+        return [
+            d["path"].decode(errors="replace") if isinstance(d["path"], bytes) else d["path"]
+            for d in hid.enumerate(vid, pid)
+        ]
     except Exception as e:
         raise PttError(f"cannot enumerate HID devices: {e}") from e
 
@@ -184,19 +246,24 @@ class _HidDevice:
         path = self._path
 
         if not path:
-            found = find_aioc_hid_path()
+            found = find_cm108_hid_devices()
             if not found:
                 raise PttError(
-                    f"no AIOC HID device found (VID:PID {AIOC_VID:04x}:{AIOC_PID:04x}); "
-                    "set the device path explicitly in the config"
+                    "no CM108-class HID interface found. Known ids: "
+                    + ", ".join(f"{v:04x}:{p:04x}" for v, p in CM108_DEVICE_IDS)
+                    + ". If your interface is not listed it is still supported: "
+                    "set ptt.hid_device (or cos.hid_device) explicitly."
                 )
             if len(found) > 1:
                 raise PttError(
-                    f"{len(found)} AIOC HID devices present; set an explicit path. Found: "
-                    + ", ".join(found)
+                    f"{len(found)} CM108-class interfaces present; set an explicit "
+                    "path. Found: "
+                    + ", ".join(f"{d['path']} ({d['name']})" for d in found)
                 )
-            path = found[0]
-            log.info("auto-selected AIOC HID device path=%s", path)
+            path = found[0]["path"]
+            log.info(
+                "auto-selected %s at %s", found[0]["name"], path
+            )
 
         _check_device_node(path)
 
@@ -248,13 +315,26 @@ class Cm108HidPtt(_HidDevice, PttBackend):
     def _write(self, asserted: bool) -> None:
         if self._dev is None:
             raise PttError("Cm108HidPtt used before open()")
-        payload = self.report.build(asserted)
+
+        # hidapi takes the report ID as the FIRST byte of write(), ahead of
+        # the report itself. These devices declare no report IDs, so that
+        # byte is 0x00 and the 4-byte GPIO report follows -- five bytes on
+        # the wire to hidapi, four bytes of actual report.
+        #
+        # Without the prefix hidapi rejects the write with -1. Measured on a
+        # Digirig Lite (C-Media 0d8c:0012): a 4-byte write returns -1, the
+        # 5-byte form returns 5.
+        payload = _HIDAPI_REPORT_ID + self.report.build(asserted)
         try:
             written = self._dev.write(payload)
         except Exception as e:
             raise PttError(f"HID write failed: {e}") from e
         if written < 0:
-            raise PttError(f"HID write returned {written}")
+            raise PttError(
+                f"HID write returned {written} for a {len(payload)}-byte report. "
+                "The interface rejected it; check the device is not claimed by "
+                "another process (Asterisk's chan_simpleusb holds it)."
+            )
 
     def key(self) -> None:
         self._write(True)

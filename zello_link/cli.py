@@ -250,12 +250,17 @@ async def _diagnose_aioc(cfg: Any, *, ptt_test: bool) -> int:
         return EXIT_DEVICE
 
     try:
-        from .hardware.aioc_hid import find_aioc_hid_path
+        from .hardware.aioc_hid import find_cm108_hid_devices
 
-        paths = find_aioc_hid_path()
-        print(f"AIOC HID devices: {paths if paths else 'none found'}")
+        devices = find_cm108_hid_devices()
+        if devices:
+            print("CM108-class HID interfaces:")
+            for d in devices:
+                print(f"  {d['path']}  {d['vid']:04x}:{d['pid']:04x}  {d['name']}")
+        else:
+            print("CM108-class HID interfaces: none found")
     except Exception as e:
-        print(f"AIOC HID enumeration unavailable: {e}")
+        print(f"HID enumeration unavailable: {e}")
 
     # COS over HID either works or fails silently: poll() keeps returning the
     # last known state, so a bridge that can never hear the radio looks
