@@ -391,3 +391,147 @@ class TestAslInstructions:
 
     def test_includes_the_startup_macro(self):
         assert "startup_macro = *31998" in self._text()
+
+
+REAL_RPT = """\
+[general]
+;rxchannel = USRP/127.0.0.1:34001:32001    ;GNU Radio interface USRP
+
+[nodes]
+531133 = radio@127.0.0.1/531133,NONE
+675 = radio@127.0.0.1/675,NONE
+
+[node-main](!)
+duplex = 1
+
+[531133](node-main)
+rxchannel = SimpleUSB/531133      ; SimpleUSB
+;rxchannel = USRP/100.81.118.119:34001:32001
+duplex = 1
+
+[675]
+;rxchannel = SimpleUSB/675
+rxchannel = USRP/127.0.0.1:34001:32001   ; zello-link bridge
+duplex = 0
+
+[functions]
+[telemetry]
+"""
+
+
+class TestRptConfParsing:
+    """Most USRP bridges run on the ASL box, so an existing node turns a
+    four-question interview into one keystroke."""
+
+    def _nodes(self, text=REAL_RPT):
+        from zello_link.diagnostics.setup_wizard import parse_rpt_conf
+
+        return parse_rpt_conf(text)
+
+    def test_finds_usrp_nodes(self):
+        assert {n.node for n in self._nodes()} == {"531133", "675"}
+
+    def test_ignores_commented_sample_outside_a_node_stanza(self):
+        """The shipped rpt.conf documents USRP under [general]; that is not
+        a node and must not be offered."""
+        assert all(n.node.isdigit() for n in self._nodes())
+
+    def test_ignores_non_usrp_rxchannels(self):
+        assert all("USRP" in n.rxchannel for n in self._nodes())
+
+    def test_reads_the_template_suffix_off_the_section_name(self):
+        """[531133](node-main) is node 531133, not '531133](node-main'."""
+        assert any(n.node == "531133" for n in self._nodes())
+
+    def test_flags_a_commented_rxchannel(self):
+        by_node = {n.node: n for n in self._nodes()}
+        assert by_node["531133"].enabled is False
+        assert by_node["675"].enabled is True
+
+    def test_extracts_all_three_fields(self):
+        n = {x.node: x for x in self._nodes()}["675"]
+        assert (n.bind_host, n.bind_port, n.asl_port) == ("127.0.0.1", 34001, 32001)
+
+    def test_remote_bind_host_is_preserved(self):
+        n = {x.node: x for x in self._nodes()}["531133"]
+        assert n.bind_host == "100.81.118.119"
+
+    def test_myport_defaults_when_omitted(self):
+        """rxchannel = USRP/host:port is legal; MYPORT falls back to 32001."""
+        nodes = self._nodes("[1998]\nrxchannel = USRP/127.0.0.1:34001\n")
+        assert nodes[0].asl_port == 32001
+
+    def test_rxchannel_round_trips(self):
+        n = {x.node: x for x in self._nodes()}["675"]
+        assert n.rxchannel == "USRP/127.0.0.1:34001:32001"
+
+    def test_trailing_comment_does_not_break_parsing(self):
+        n = {x.node: x for x in self._nodes()}["675"]
+        assert n.bind_port == 34001
+
+    def test_empty_config(self):
+        assert self._nodes("") == []
+
+    def test_config_with_no_usrp(self):
+        assert self._nodes("[675]\nrxchannel = SimpleUSB/675\n") == []
+
+
+class TestLocalAslDetection:
+    def test_absent_when_no_config_exists(self, tmp_path):
+        from zello_link.diagnostics.setup_wizard import detect_local_asl
+
+        present, nodes = detect_local_asl(paths=[str(tmp_path / "nope.conf")])
+        assert nodes == []
+
+    def test_finds_nodes_in_a_real_config(self, tmp_path):
+        from zello_link.diagnostics.setup_wizard import detect_local_asl
+
+        f = tmp_path / "rpt.conf"
+        f.write_text(REAL_RPT)
+        present, nodes = detect_local_asl(paths=[str(f)])
+        assert present is True
+        assert len(nodes) == 2
+
+    def test_records_where_it_was_found(self, tmp_path):
+        from zello_link.diagnostics.setup_wizard import detect_local_asl
+
+        f = tmp_path / "rpt.conf"
+        f.write_text(REAL_RPT)
+        _, nodes = detect_local_asl(paths=[str(f)])
+        assert all(n.source == str(f) for n in nodes)
+
+
+class TestFlowStyleRefusal:
+    """Line-based editing cannot safely add a key to an inline mapping."""
+
+    def test_refuses_rather_than_producing_invalid_yaml(self):
+        from zello_link.diagnostics.setup_wizard import set_config_value
+
+        with pytest.raises(KeyError, match="flow style"):
+            set_config_value(
+                'bridge: {backend: "aioc"}\n', "bridge", "backend", '"usrp"',
+                insert_if_missing=True,
+            )
+
+    def test_ensure_section_also_refuses(self):
+        from zello_link.diagnostics.setup_wizard import ensure_section
+
+        with pytest.raises(KeyError, match="flow style"):
+            ensure_section('usrp: {bind_port: 1}\n', "usrp")
+
+    def test_error_shows_how_to_fix_it(self):
+        from zello_link.diagnostics.setup_wizard import ensure_section
+
+        with pytest.raises(KeyError) as exc:
+            ensure_section('usrp: {bind_port: 1}\n', "usrp")
+        assert "block style" in str(exc.value)
+
+    def test_block_style_is_unaffected(self):
+        import yaml
+
+        from zello_link.diagnostics.setup_wizard import set_config_value
+
+        out = set_config_value(
+            'bridge:\n  backend: "aioc"\n', "bridge", "backend", '"usrp"'
+        )
+        assert yaml.safe_load(out)["bridge"]["backend"] == "usrp"

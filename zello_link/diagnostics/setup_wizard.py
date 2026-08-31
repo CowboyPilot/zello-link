@@ -15,6 +15,7 @@ Two things make this fiddly enough to be worth its own module:
 
 from __future__ import annotations
 
+import pathlib
 import re
 import sys
 from dataclasses import dataclass
@@ -32,6 +33,11 @@ class SelectionAborted(Exception):
 
 # -- surgical YAML editing -------------------------------------------------
 _KEY_RE = re.compile(r"^(?P<indent>\s*)(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*:(?P<rest>.*)$")
+
+#: A section written in YAML flow style -- ``bridge: {backend: "aioc"}``.
+#: Line-based editing cannot safely add a key to one of these, so they are
+#: refused with an explanation rather than silently mangled.
+_FLOW_SECTION_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:\s*[\{\[]")
 
 
 def set_config_value(
@@ -77,10 +83,29 @@ def set_config_value(
     return "".join(out)
 
 
+def _check_not_flow_style(lines: Sequence[str], section: str) -> None:
+    """Refuse to edit a section written as an inline mapping.
+
+    ``bridge: {backend: "aioc"}`` is valid YAML, but appending an indented
+    key under it produces a file that will not parse. Saying so beats
+    emitting something broken.
+    """
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(f"{section}:") and _FLOW_SECTION_RE.match(stripped):
+            raise KeyError(
+                f"section {section!r} is written in YAML flow style "
+                f"({stripped[:40]}...). Expand it to block style, e.g.\n"
+                f"    {section}:\n      key: value\n"
+                "so individual settings can be edited without rewriting the file."
+            )
+
+
 def _insert_under_section(
     lines: Sequence[str], section: str, key: str, value: str
 ) -> str:
     """Add ``key`` immediately below the ``section:`` header."""
+    _check_not_flow_style(lines, section)
     out: list[str] = []
     inserted = False
 
@@ -124,7 +149,9 @@ def ensure_section(text: str, section: str) -> str:
     block at all, and set_config_value can only insert into a section that
     already exists.
     """
-    for line in text.splitlines():
+    lines = text.splitlines()
+    _check_not_flow_style(lines, section)
+    for line in lines:
         m = _KEY_RE.match(line)
         if m and not m.group("indent") and m.group("key") == section:
             return text
@@ -286,6 +313,105 @@ def _prompt_hid_device(current: Any) -> str:
 #: shipped rpt.conf documents 1998 as the sample private node.
 DEFAULT_ASL_NODE = 1998
 
+#: Where an ASL3 install keeps its app_rpt config.
+ASL_CONF_PATHS = ("/etc/asterisk/rpt.conf",)
+
+#: rxchannel = USRP/<HISIP>:<HISPORT>[:<MYPORT>]
+_USRP_RX_RE = re.compile(
+    r"^(?P<comment>\s*;\s*)?rxchannel\s*=\s*USRP/"
+    r"(?P<host>[^:\s]+):(?P<hisport>\d+)(?::(?P<myport>\d+))?",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class LocalAslNode:
+    """A USRP rxchannel found in a local rpt.conf.
+
+    Field names follow the bridge's view, not chan_usrp's: HISIP/HISPORT are
+    where ASL sends audio (so, this bridge), MYPORT is where Asterisk
+    listens.
+    """
+
+    node: str
+    bind_host: str
+    bind_port: int
+    asl_port: int
+    enabled: bool
+    source: str
+
+    @property
+    def rxchannel(self) -> str:
+        return f"USRP/{self.bind_host}:{self.bind_port}:{self.asl_port}"
+
+
+def parse_rpt_conf(text: str, source: str = "rpt.conf") -> list[LocalAslNode]:
+    """Extract USRP rxchannel definitions, with their node numbers.
+
+    Commented-out lines are returned too, flagged ``enabled=False``: a
+    half-configured node is exactly the case worth offering to finish, and
+    silently ignoring it would look like "nothing found".
+    """
+    nodes: list[LocalAslNode] = []
+    section: str | None = None
+
+    for raw in text.splitlines():
+        header = re.match(r"^\[([^\]]+)\]", raw.strip())
+        if header:
+            # Strip a template suffix such as [531133](node-main).
+            section = header.group(1).strip()
+            continue
+        if section is None or not section.isdigit():
+            continue
+
+        m = _USRP_RX_RE.match(raw)
+        if not m:
+            continue
+        nodes.append(
+            LocalAslNode(
+                node=section,
+                bind_host=m.group("host"),
+                bind_port=int(m.group("hisport")),
+                # MYPORT is optional in the rxchannel syntax; ASL's own
+                # sample uses 32001 when it is omitted.
+                asl_port=int(m.group("myport") or 32001),
+                enabled=m.group("comment") is None,
+                source=source,
+            )
+        )
+    return nodes
+
+
+def detect_local_asl(
+    paths: Sequence[str] = ASL_CONF_PATHS,
+) -> tuple[bool, list[LocalAslNode]]:
+    """Look for AllStarLink on this host and any USRP nodes it defines.
+
+    Returns (asl_present, usrp_nodes). Most USRP bridges run on the ASL box
+    itself, so finding a node here turns a four-question setup into one
+    keystroke.
+    """
+    present = False
+    nodes: list[LocalAslNode] = []
+
+    for path in paths:
+        f = pathlib.Path(path)
+        if not f.is_file():
+            continue
+        present = True
+        try:
+            nodes.extend(parse_rpt_conf(f.read_text(errors="replace"), source=path))
+        except OSError:
+            # Readable-by-root configs are common; presence still counts.
+            pass
+
+    if not present:
+        present = any(
+            pathlib.Path(p).exists()
+            for p in ("/usr/sbin/asterisk", "/usr/bin/asterisk", "/etc/asterisk")
+        )
+    return present, nodes
+
 
 def local_addresses() -> list[str]:
     """Every IPv4 address this host could bind, most useful first.
@@ -441,6 +567,76 @@ def run_usrp_setup(cfg: Any, config_path: str) -> int:
     return rc
 
 
+def run_local_asl_setup(cfg: Any, config_path: str, node: LocalAslNode) -> int:
+    """Adopt a USRP node already defined in the local rpt.conf.
+
+    Everything needed is already in that rxchannel line, so this is a
+    confirmation rather than an interview.
+    """
+    local = local_addresses()
+    bind_host = node.bind_host
+    asl_host = "127.0.0.1"          # ASL is on this host, by definition
+
+    print(f"\n--- Local AllStarLink node {node.node} ---", file=sys.stderr)
+    print(f"  {node.source}: rxchannel = {node.rxchannel}", file=sys.stderr)
+    if not node.enabled:
+        print(
+            "  NOTE: that rxchannel line is COMMENTED OUT, so the node is not "
+            "using USRP yet.\n  Uncomment it and restart Asterisk once this is "
+            "written.",
+            file=sys.stderr,
+        )
+    if bind_host not in local:
+        print(
+            f"\n  WARNING: the node sends audio to {bind_host}, which is not an "
+            f"address\n  on this host ({', '.join(local)}). Either the bridge is "
+            "meant to run\n  elsewhere, or that rxchannel line needs updating to "
+            "point here.",
+            file=sys.stderr,
+        )
+
+    pending: list[tuple[str, str, Any, str]] = [
+        ("bridge", "backend", "usrp", "usrp"),
+        ("usrp", "bind_host", bind_host, bind_host),
+        ("usrp", "bind_port", node.bind_port, str(node.bind_port)),
+        ("usrp", "asl_host", asl_host, f"{asl_host} (local)"),
+        ("usrp", "asl_port", node.asl_port, str(node.asl_port)),
+    ]
+    if not bind_host.startswith("127."):
+        pending.append(
+            ("usrp", "allow_remote_host", True, "true (bind is not loopback)")
+        )
+
+    print("\nAbout to write:", file=sys.stderr)
+    for section, key, _v, shown in pending:
+        print(f"  {section}.{key}: {shown}", file=sys.stderr)
+
+    if not _confirm(f"\nUpdate {config_path}?"):
+        print("nothing written.", file=sys.stderr)
+        return 0
+
+    rc = _write(config_path, pending, sections=("usrp",))
+    if rc == 0:
+        print(
+            f"\nConfigured against local node {node.node}. Nothing to change in "
+            "rpt.conf --\nit already defines this USRP channel.",
+            file=sys.stderr,
+        )
+        if not node.enabled:
+            print(
+                f"\n  Except: uncomment the rxchannel line for [{node.node}] and\n"
+                "  systemctl restart asterisk   (an rxchannel change needs a "
+                "restart, not a reload)",
+                file=sys.stderr,
+            )
+        print(
+            "\n  Verify:  asterisk -rx \"module show like chan_usrp\"\n"
+            "           asterisk -rx \"core show channels\" | grep -i usrp",
+            file=sys.stderr,
+        )
+    return rc
+
+
 def render_asl_instructions(
     bind_host: str, bind_port: int, asl_port: int, node: int = DEFAULT_ASL_NODE
 ) -> str:
@@ -534,21 +730,49 @@ def run_device_setup(cfg: Any, config_path: str) -> int:
     # Which radio side is this instance driving? The two are peers: a
     # deployment picks one, so asking up front avoids walking someone
     # through sound-card selection they will never use.
+    # Most USRP bridges run on the ASL box itself, so a node already in the
+    # local rpt.conf turns a four-question interview into one keystroke.
+    asl_present, asl_nodes = detect_local_asl()
+
+    choices: list[Choice] = []
+    for n in asl_nodes:
+        choices.append(
+            Choice(
+                n,
+                f"Local AllStarLink node {n.node}  -  {n.rxchannel}",
+                f"found in {n.source}"
+                + ("" if n.enabled else "  [rxchannel is commented out]"),
+            )
+        )
+    choices.append(
+        Choice("aioc", "Audio device  - a radio on a CM108/AIOC interface",
+               f"{len(devices)} device(s) detected")
+    )
+    choices.append(
+        Choice("usrp", "AllStarLink   - configure chan_usrp by hand",
+               "for a node on another host, or one not defined yet")
+    )
+
+    if asl_present and not asl_nodes:
+        print(
+            "\n  AllStarLink is installed here but no USRP rxchannel was found "
+            "in its\n  config. Choosing 'configure by hand' will print the "
+            "stanza to add.",
+            file=sys.stderr,
+        )
+
     try:
         backend = _prompt_choice(
             "Radio side  (what is on the far end of this bridge)",
-            [
-                Choice("aioc", "Audio device  - a radio on a CM108/AIOC interface",
-                       f"{len(devices)} device(s) detected"),
-                Choice("usrp", "AllStarLink   - a node over chan_usrp (UDP)",
-                       "no radio or sound card needed on this host"),
-            ],
+            choices,
             cfg.bridge.backend,
         )
     except SelectionAborted as e:
         print(f"\nsetup {e}; nothing written.", file=sys.stderr)
         return 0
 
+    if isinstance(backend, LocalAslNode):
+        return run_local_asl_setup(cfg, config_path, backend)
     if backend == "usrp":
         return run_usrp_setup(cfg, config_path)
 
