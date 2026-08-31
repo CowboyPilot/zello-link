@@ -268,6 +268,16 @@ class PttConfig(_Model):
     tty_device: str | None = None
     hid_device: str | None = None
 
+    # Which serial line keys the radio. The AIOC asserts PTT on DTR (holding
+    # RTS low); the Digirig Mobile wires PTT to RTS instead. Same cable
+    # shape, opposite pin, so this is a setting rather than a second mode.
+    serial_signal: Literal["dtr", "rts"] = "dtr"
+
+    # Which CM108 GPIO drives PTT. 3 is the common wiring (AIOC, Digirig
+    # Lite); some interfaces use 4. 1-based to match the datasheet and the
+    # silkscreen.
+    gpio_pin: int = Field(default=3, ge=1, le=8)
+
     pre_key_ms: int = Field(default=150, ge=0, le=2000)
     post_audio_ms: int = Field(default=120, ge=0, le=2000)
 

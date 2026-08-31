@@ -91,6 +91,18 @@ ptt:
   tty_device: "/dev/serial/by-id/usb-AIOC_All-In-One-Cable_-if00"
   hid_device: null
 
+  # Which line keys the radio. Interfaces differ on the same cable shape:
+  #   dtr   AIOC (firmware >= 1.2.0), most home-built CAT cables
+  #   rts   Digirig Mobile
+  # The other line is held low throughout, so only one ever asserts.
+  serial_signal: "dtr"         # dtr | rts
+
+  # cm108_hid only: which CM108 GPIO drives PTT. 1-based, matching the
+  # datasheet and silkscreen.
+  #   3   AIOC, Digirig Lite  (the common wiring)
+  #   4   some other CM108 interfaces
+  gpio_pin: 3
+
   pre_key_ms: 150              # radio transmit attack time; verify on bench
   post_audio_ms: 120
   max_tx_s: 180                # hard watchdog, enforced independently

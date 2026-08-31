@@ -171,9 +171,19 @@ class Cm108HidPtt(_HidDevice, PttBackend):
 
     name = "cm108_hid"
 
-    def __init__(self, device: str | None, *, report: Cm108Report | None = None) -> None:
+    def __init__(
+        self,
+        device: str | None,
+        *,
+        report: Cm108Report | None = None,
+        gpio_pin: int | None = None,
+    ) -> None:
         super().__init__(device)
-        self.report = report or Cm108Report()
+        if report is not None and gpio_pin is not None:
+            raise PttError("pass report or gpio_pin, not both")
+        if report is None:
+            report = Cm108Report() if gpio_pin is None else Cm108Report(gpio_pin=gpio_pin)
+        self.report = report
         self._keyed = False
 
     def open(self) -> None:

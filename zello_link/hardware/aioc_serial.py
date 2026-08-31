@@ -1,9 +1,15 @@
-"""AIOC serial PTT over the CDC-ACM (ttyACM) interface.
+"""Serial PTT over a CDC-ACM (ttyACM) interface.
 
-AIOC firmware >= 1.2.0 asserts PTT on DTR=1 with RTS=0. Both lines are driven
-explicitly on open: pyserial and the underlying tty driver each have their own
-notion of default line state, and on some platforms opening the port asserts
-DTR -- which would key the transmitter at startup. AT-02 forbids that.
+Which line keys the radio depends on the interface, not the protocol:
+
+  * AIOC firmware >= 1.2.0 asserts PTT on DTR=1, RTS=0
+  * Digirig Mobile wires PTT to RTS instead
+
+so the asserting line is a parameter and the other line is always held low.
+Both are driven explicitly on open: pyserial and the underlying tty driver
+each have their own notion of default line state, and on some platforms
+opening the port asserts DTR -- which would key the transmitter at startup.
+AT-02 forbids that.
 """
 
 from __future__ import annotations
@@ -19,15 +25,22 @@ log = logging.getLogger(__name__)
 
 
 class SerialPtt(PttBackend):
-    """PTT via DTR/RTS on an AIOC serial port."""
+    """PTT via DTR or RTS on a serial interface."""
 
     name = "serial"
 
-    def __init__(self, device: str, *, baudrate: int = 115200) -> None:
+    def __init__(
+        self, device: str, *, baudrate: int = 115200, signal: str = "dtr"
+    ) -> None:
         if not device:
             raise PttError("SerialPtt requires a tty device path")
+        if signal not in ("dtr", "rts"):
+            raise PttError(f"ptt.serial_signal must be 'dtr' or 'rts', got {signal!r}")
         self.device = device
         self.baudrate = baudrate
+        self.signal = signal
+        #: The line held low throughout, so only one line ever asserts.
+        self.idle_signal = "rts" if signal == "dtr" else "dtr"
         self._port: Any = None
         self._keyed = False
 
@@ -71,10 +84,11 @@ class SerialPtt(PttBackend):
         if self._port is None:
             raise PttError("SerialPtt.key() before open()")
         try:
-            # RTS first, then DTR: DTR is the asserting line, so it is set
-            # last and cleared first.
-            self._port.rts = False
-            self._port.dtr = True
+            # Idle line first, then the asserting one: the line that keys the
+            # radio is set last and cleared first, so no ordering of the two
+            # can produce a momentary unintended key.
+            setattr(self._port, self.idle_signal, False)
+            setattr(self._port, self.signal, True)
         except Exception as e:
             self._keyed = False
             raise PttError(f"cannot assert PTT on {self.device}: {e}") from e
@@ -85,7 +99,7 @@ class SerialPtt(PttBackend):
             self._keyed = False
             return
         try:
-            self._port.dtr = False
+            setattr(self._port, self.signal, False)
         except Exception as e:
             raise PttError(f"cannot release PTT on {self.device}: {e}") from e
         finally:

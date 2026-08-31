@@ -238,11 +238,11 @@ def create_ptt_backend(cfg: Any) -> PttBackend:
     if mode == "serial":
         from .aioc_serial import SerialPtt
 
-        return SerialPtt(cfg.ptt.tty_device)
+        return SerialPtt(cfg.ptt.tty_device, signal=cfg.ptt.serial_signal)
 
     if mode == "cm108_hid":
         from .aioc_hid import Cm108HidPtt
 
-        return Cm108HidPtt(cfg.ptt.hid_device)
+        return Cm108HidPtt(cfg.ptt.hid_device, gpio_pin=cfg.ptt.gpio_pin)
 
     raise PttError(f"unknown ptt.mode {mode!r}")
