@@ -58,6 +58,21 @@ class ZelloError(Exception):
     """Protocol-level failure reported by the server or the transport."""
 
 
+#: Zello's close code for "another session logged on with this account".
+KICK_CLOSE_CODE = 3003
+
+
+def _is_kick(exc: BaseException) -> bool:
+    """True when the server closed us out for a duplicate logon."""
+    code = getattr(exc, "code", None)
+    if code == KICK_CLOSE_CODE:
+        return True
+    rcvd = getattr(exc, "rcvd", None)
+    if getattr(rcvd, "code", None) == KICK_CLOSE_CODE:
+        return True
+    return "kicked" in str(exc).lower() and str(KICK_CLOSE_CODE) in str(exc)
+
+
 class ZelloClient:
     """One WebSocket connection to one Zello channel."""
 
@@ -103,6 +118,9 @@ class ZelloClient:
         self.connects = 0
         self.disconnects = 0
         self.half_open_detections = 0
+        #: Times the server closed us out because another session logged on
+        #: with this account. Repeats mean two bridges share credentials.
+        self.kicks = 0
 
     def set_handlers(
         self,
@@ -158,7 +176,11 @@ class ZelloClient:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.log.warning("connection failed: %s", e)
+                if _is_kick(e):
+                    self.kicks += 1
+                    self._warn_about_kick()
+                else:
+                    self.log.warning("connection failed: %s", e)
                 # A refresh token that did not work is worse than useless:
                 # retrying with it just burns reconnect attempts.
                 if use_refresh:
@@ -230,6 +252,36 @@ class ZelloClient:
                     receiver.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await receiver
+
+    def _warn_about_kick(self) -> None:
+        """Say what a 3003 close actually means.
+
+        Zello permits ONE session per account. This close code means another
+        session logged on and took it -- almost always a second bridge, or an
+        app signed into the same account. Two bridges sharing credentials
+        kick each other indefinitely: each reconnect steals the session back,
+        and both spend most of their time in reconnect backoff with traffic
+        failing in BOTH directions.
+
+        The bare close-code warning was not enough. One deployment logged 483
+        of them over two days while the cause went unrecognised.
+        """
+        if self.kicks == 1 or self.kicks % 10 == 0:
+            self.log.error(
+                "kicked by the server (close %d): another session logged on as "
+                "%r. Zello allows ONE session per account -- this is the %d%s "
+                "time. Check for a second bridge, or an app signed in with the "
+                "same account; each will keep stealing the session from the "
+                "other and both will be unusable. Give each bridge its own "
+                "Zello account.",
+                KICK_CLOSE_CODE, self.cfg.zello.username, self.kicks,
+                {1: "st", 2: "nd", 3: "rd"}.get(self.kicks % 10, "th"),
+            )
+        else:
+            self.log.warning(
+                "kicked again (close %d, %d total): another session is using %r",
+                KICK_CLOSE_CODE, self.kicks, self.cfg.zello.username,
+            )
 
     async def _teardown(self) -> None:
         was_connected = self._connected.is_set()
@@ -527,6 +579,7 @@ class ZelloClient:
 
     def stats(self) -> dict[str, int]:
         return {
+            "kicks": self.kicks,
             "connects": self.connects,
             "disconnects": self.disconnects,
             "half_open_detections": self.half_open_detections,

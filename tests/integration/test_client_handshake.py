@@ -347,3 +347,80 @@ class TestChannelErrorDiagnostics:
             "command": "on_channel_status", "status": "online", "users_online": 2,
         }))
         assert client.channel_ready is True
+
+
+class TestKickDiagnosis:
+    """Close 3003 means another session took the account.
+
+    Zello permits ONE session per account. Two bridges sharing credentials
+    kick each other indefinitely: each reconnect steals the session back, and
+    both spend most of their time in backoff with traffic failing in BOTH
+    directions. That is what it looks like from the outside -- "it works, then
+    stops, then works again" -- and nothing in the bare close-code warning
+    pointed at the cause. One deployment logged 483 of them across two days
+    before anyone recognised it.
+    """
+
+    def test_detects_the_close_code_on_the_exception(self):
+        from zello_link.zello.client import _is_kick
+
+        class Closed(Exception):
+            code = 3003
+
+        assert _is_kick(Closed()) is True
+
+    def test_detects_it_on_the_received_frame(self):
+        from zello_link.zello.client import _is_kick
+
+        class Frame:
+            code = 3003
+
+        class Closed(Exception):
+            rcvd = Frame()
+
+        assert _is_kick(Closed()) is True
+
+    def test_detects_the_library_message_form(self):
+        from zello_link.zello.client import _is_kick
+
+        exc = Exception("received 3003 (registered) kicked; then sent 3003 (registered) kicked")
+        assert _is_kick(exc) is True
+
+    def test_ordinary_disconnects_are_not_kicks(self):
+        from zello_link.zello.client import _is_kick
+
+        class Closed(Exception):
+            code = 1006
+
+        assert _is_kick(Closed()) is False
+        assert _is_kick(OSError("connection reset")) is False
+
+    async def test_first_kick_explains_the_cause(self, cfg, caplog):
+        import logging
+
+        client = ZelloClient(cfg)
+        client.kicks = 1
+        with caplog.at_level(logging.ERROR, logger="zello_link.zello"):
+            client._warn_about_kick()
+        msg = " ".join(r.getMessage() for r in caplog.records)
+        assert "ONE session per account" in msg
+        assert "second bridge" in msg
+        assert cfg.zello.username in msg
+
+    async def test_repeat_kicks_do_not_fill_the_disk(self, cfg, caplog):
+        """A fight between two bridges produces one of these every minute."""
+        import logging
+
+        client = ZelloClient(cfg)
+        with caplog.at_level(logging.WARNING, logger="zello_link.zello"):
+            for n in range(1, 10):
+                client.kicks = n
+                client._warn_about_kick()
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1, "the full explanation should not repeat every time"
+
+    async def test_kick_count_is_exposed_for_metrics(self, cfg):
+        """So a fight is visible in the metrics line, not only in the log."""
+        client = ZelloClient(cfg)
+        client.kicks = 7
+        assert client.stats()["kicks"] == 7
