@@ -298,3 +298,57 @@ class TestSystemdAvailability:
         monkeypatch.setattr(cw.os, "geteuid", lambda: 0)
         monkeypatch.setattr(cw.sys, "platform", "darwin")
         assert cw.systemd_available() is False
+
+
+class TestProtectHomeDoesNotBreakTheUnit:
+    """ProtectHome hides /root and /home from the service.
+
+    The quickstart clones into a home directory by default, so setting it
+    there makes the interpreter itself unreachable: systemd fails with
+    203/EXEC and Restart=always loops forever. A generated unit did exactly
+    that 170 times on a live host while the operator's hand-started process
+    kept working, which made it look like the service was fine.
+    """
+
+    def _unit(self, python, config, env):
+        from zello_link.diagnostics.config_wizard import render_systemd_unit
+
+        return render_systemd_unit(
+            aioc_answers(), python=python, config_path=config,
+            env_path=env, user="root",
+        )
+
+    def test_omitted_when_the_interpreter_is_under_root(self):
+        unit = self._unit(
+            "/root/zl/.venv/bin/python", "/root/zl/w.yaml", "/root/zl/w.env"
+        )
+        assert "ProtectHome=true" not in unit
+        assert "deliberately NOT set" in unit
+
+    def test_omitted_when_the_interpreter_is_under_home(self):
+        unit = self._unit(
+            "/home/pi/zl/.venv/bin/python", "/home/pi/zl/w.yaml", "/home/pi/zl/w.env"
+        )
+        assert "ProtectHome=true" not in unit
+
+    def test_omitted_when_only_the_config_is_under_home(self):
+        """EnvironmentFile and --config must be readable too, not just the exe."""
+        unit = self._unit(
+            "/opt/zl/.venv/bin/python", "/root/w.yaml", "/opt/zl/w.env"
+        )
+        assert "ProtectHome=true" not in unit
+
+    def test_kept_when_nothing_lives_in_a_home_directory(self):
+        """The hardening is still worth having where it costs nothing."""
+        unit = self._unit(
+            "/opt/zl/.venv/bin/python", "/etc/zl/w.yaml", "/etc/zl/w.env"
+        )
+        assert "ProtectHome=true" in unit
+
+    def test_other_hardening_is_unaffected(self):
+        unit = self._unit(
+            "/root/zl/.venv/bin/python", "/root/zl/w.yaml", "/root/zl/w.env"
+        )
+        for directive in ("NoNewPrivileges=true", "PrivateTmp=true",
+                          "ProtectKernelTunables=true", "LockPersonality=true"):
+            assert directive in unit

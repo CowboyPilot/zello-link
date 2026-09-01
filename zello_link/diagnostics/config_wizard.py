@@ -718,6 +718,21 @@ def render_systemd_unit(
     used to test the interface is the membership the service gets. Handing it
     to a fresh account is how a bridge that worked by hand fails as a service.
     """
+    # ProtectHome hides /root and /home from the service. The quickstart
+    # clones into a home directory by default, so switching it on there makes
+    # the interpreter itself unreachable and the unit fails 203/EXEC forever.
+    # Verified: a wizard-generated unit restarted 170 times for exactly this.
+    under_home = any(
+        str(Path(pth).resolve()).startswith(("/root", "/home"))
+        for pth in (python, config_path, env_path)
+    )
+    protect_home = (
+        "# ProtectHome deliberately NOT set: this instance lives under a home\n"
+        "# directory, and hiding it would make the interpreter unreachable.\n"
+        if under_home
+        else "ProtectHome=true\n"
+    )
+
     return f"""[Unit]
 Description=zello-link bridge - {a.name}
 After=network-online.target sound.target
@@ -740,8 +755,7 @@ TimeoutStopSec=15
 
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectHome=true
-ProtectKernelTunables=true
+{protect_home}ProtectKernelTunables=true
 ProtectControlGroups=true
 LockPersonality=true
 
