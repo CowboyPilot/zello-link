@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .setup_wizard import (
@@ -722,8 +722,13 @@ def render_systemd_unit(
     # clones into a home directory by default, so switching it on there makes
     # the interpreter itself unreachable and the unit fails 203/EXEC forever.
     # Verified: a wizard-generated unit restarted 170 times for exactly this.
+    # PurePosixPath, not resolve(): these are literal strings bound for a
+    # unit file on a Linux host, and resolve() both touches the filesystem
+    # and follows symlinks. On macOS it rewrites /home through autofs to
+    # /System/Volumes/Data/home, which defeated the check entirely.
     under_home = any(
-        str(Path(pth).resolve()).startswith(("/root", "/home"))
+        str(PurePosixPath(pth)).startswith(("/root/", "/home/"))
+        or str(PurePosixPath(pth)) in ("/root", "/home")
         for pth in (python, config_path, env_path)
     )
     protect_home = (
