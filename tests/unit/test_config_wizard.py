@@ -204,3 +204,97 @@ class TestEnvFilePermissions:
             fh.write(render_env(a))
         mode = stat.S_IMODE(p.stat().st_mode)
         assert mode == 0o600, f"expected 600, got {mode:o}"
+
+
+class TestOutputIsAlwaysCaptured:
+    """A bridge must never be left writing its log into the void.
+
+    From a live incident: an instance started by hand ran for 12 hours with
+    stdout pointing at a closed terminal's pty. Every line was discarded, so
+    when it stopped passing inbound audio there was nothing to diagnose from.
+    Either a supervisor owns stdout, or the config names a log file.
+    """
+
+    def test_log_file_is_written_into_the_config(self):
+        a = aioc_answers(log_file="/srv/zl/west.log")
+        text = render_config(a)
+        assert 'file: "/srv/zl/west.log"' in text
+
+    def test_log_file_config_is_valid(self, tmp_path, monkeypatch):
+        a = aioc_answers(log_file=str(tmp_path / "west.log"))
+        cfg = load_rendered(a, tmp_path, monkeypatch)
+        assert Path(cfg.logging.file) == tmp_path / "west.log"
+
+    def test_log_file_gets_rotation_so_it_cannot_fill_the_disk(self):
+        a = aioc_answers(log_file="/srv/zl/west.log")
+        text = render_config(a)
+        assert "max_bytes:" in text and "backup_count:" in text
+
+    def test_no_log_file_means_a_supervisor_owns_stdout(self):
+        """Only valid when something else is capturing it; say so in the file."""
+        text = render_config(aioc_answers())
+        assert "file: null" in text
+        assert "supervisor captures it" in text
+
+
+class TestSystemdUnit:
+    def _unit(self, **kw):
+        from zello_link.diagnostics.config_wizard import render_systemd_unit
+
+        return render_systemd_unit(
+            aioc_answers(), python="/opt/v/bin/python",
+            config_path="/etc/zl/west.yaml", env_path="/etc/zl/west.env",
+            user=kw.get("user", "pi"),
+        )
+
+    def test_uses_the_real_interpreter_path(self):
+        """The repo's @.service template hardcodes /opt/zello-link.
+
+        A wizard run from a checkout would otherwise emit a unit pointing at
+        an interpreter that does not exist.
+        """
+        unit = self._unit()
+        assert "/opt/v/bin/python -m zello_link" in unit
+        assert "/opt/zello-link" not in unit
+
+    def test_validates_before_starting(self):
+        assert "--validate" in self._unit()
+
+    def test_loads_credentials_from_the_env_file(self):
+        assert "EnvironmentFile=/etc/zl/west.env" in self._unit()
+
+    def test_sigterm_with_room_to_unkey(self):
+        """SIGKILL mid-shutdown can leave the transmitter keyed."""
+        unit = self._unit()
+        assert "KillSignal=SIGTERM" in unit
+        assert "TimeoutStopSec=15" in unit
+
+    def test_restarts_on_failure_and_starts_at_boot(self):
+        unit = self._unit()
+        assert "Restart=always" in unit
+        assert "WantedBy=multi-user.target" in unit
+
+    def test_runs_as_the_user_who_ran_setup(self):
+        """Device group membership tested by hand must carry to the service."""
+        assert "User=pi" in self._unit(user="pi")
+
+    def test_unit_name_is_per_instance(self):
+        from zello_link.diagnostics.config_wizard import unit_name
+
+        assert unit_name(Answers(name="west")) == "zello-link-west.service"
+        assert unit_name(Answers(name="east")) != unit_name(Answers(name="west"))
+
+
+class TestSystemdAvailability:
+    def test_requires_root(self, monkeypatch):
+        from zello_link.diagnostics import config_wizard as cw
+
+        monkeypatch.setattr(cw.os, "geteuid", lambda: 1000)
+        assert cw.systemd_available() is False
+
+    def test_requires_systemd_to_be_running(self, monkeypatch):
+        from zello_link.diagnostics import config_wizard as cw
+
+        monkeypatch.setattr(cw.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(cw.sys, "platform", "darwin")
+        assert cw.systemd_available() is False

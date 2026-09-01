@@ -85,6 +85,10 @@ class Answers:
     asl_host: str = "127.0.0.1"
     asl_port: int = 32001
 
+    #: Where log output goes when nothing else is capturing it. Empty means
+    #: a supervisor owns stdout -- systemd puts it in the journal.
+    log_file: str = ""
+
     #: Secrets, kept apart from the config so they can be written 0600.
     secrets: dict[str, str] = field(default_factory=dict)
 
@@ -190,7 +194,18 @@ def render_config(a: Answers) -> str:
         "",
         "logging:",
         "  console: true",
-        "  file: null",
+    ]
+    if a.log_file:
+        # Nothing else is capturing stdout, so persist it. A hand-started
+        # instance whose terminal later closes otherwise writes every line to
+        # a dead pty and loses the lot -- which is exactly how one bug's
+        # evidence was lost.
+        out.append(f"  file: {yaml_scalar(a.log_file)}")
+        out.append("  max_bytes: 10485760")
+        out.append("  backup_count: 5")
+    else:
+        out.append("  file: null            # stdout; the supervisor captures it")
+    out += [
         "",
         "metrics:",
         "  enabled: true",
@@ -494,6 +509,43 @@ def _ask_usrp(a: Answers) -> None:
     a.asl_port = _prompt_port("Asterisk's UDP port (MYPORT)", a.asl_port)
 
 
+def _ask_supervision(a: Answers, root: Path) -> bool:
+    """Decide how the bridge is kept running, and where its output goes.
+
+    This matters more than it looks. A bridge started by hand writes its log
+    to the terminal, and when that terminal closes the process survives with
+    stdout pointing at a dead pty -- every line silently discarded. A fault
+    that only appears after hours of idling then leaves no evidence at all,
+    which is precisely how one bug's cause went unrecorded.
+
+    So either a supervisor owns stdout, or the config gets a log file. Never
+    neither.
+    """
+    if systemd_available():
+        choice = _prompt_choice(
+            "How should the bridge be kept running?",
+            [
+                Choice("systemd", "install a systemd service  (recommended)",
+                       "starts at boot, restarts on failure, logs to the journal"),
+                Choice("manual", "just write a launch script",
+                       "you supervise it; output goes to a log file"),
+            ],
+            "systemd",
+        )
+        if choice == "systemd":
+            return True
+    else:
+        why = (
+            "not running as root" if os.geteuid() != 0
+            else "systemd not detected on this host"
+        )
+        _echo(f"\n  No service will be installed ({why}).")
+
+    a.log_file = str(root / f"{a.name}.log")
+    _echo(f"  Logging to {a.log_file}, so output survives the terminal closing.")
+    return False
+
+
 def run_config_wizard(target: str | None = None) -> int:
     """Create a config, secrets file, launcher, and venv from scratch."""
     from ..config import ConfigError, load_config
@@ -512,7 +564,7 @@ def run_config_wizard(target: str | None = None) -> int:
     _echo("  Ctrl-C to abort; nothing is written until the end.")
 
     try:
-        _heading(1, 6, "Instance")
+        _heading(1, 7, "Instance")
         a.name = _prompt_text(
             "Instance name", a.name,
             hint="used for the file names, and to keep two bridges apart",
@@ -528,17 +580,20 @@ def run_config_wizard(target: str | None = None) -> int:
             a.backend,
         )
 
-        _heading(2, 6, "Zello")
+        _heading(2, 7, "Zello")
         _ask_zello(a)
 
-        _heading(3, 6, "Direction")
+        _heading(3, 7, "Direction")
         _ask_directions(a)
 
-        _heading(4, 6, "Radio side")
+        _heading(4, 7, "Radio side")
         if a.backend == "aioc":
             _ask_aioc(a)
         else:
             _ask_usrp(a)
+
+        _heading(5, 7, "Supervision")
+        supervise = _ask_supervision(a, root)
     except SelectionAborted as e:
         _echo(f"\naborted: {e}")
         return 1
@@ -546,7 +601,7 @@ def run_config_wizard(target: str | None = None) -> int:
         _echo("\naborted")
         return 1
 
-    _heading(5, 6, "Writing files")
+    _heading(6, 7, "Writing files")
     cfg_path = root / f"{a.name}.yaml"
     env_path = root / f"{a.name}.env"
     run_path = root / f"run-{a.name}.sh"
@@ -566,7 +621,7 @@ def run_config_wizard(target: str | None = None) -> int:
         fh.write(render_env(a))
     _echo(f"  wrote {env_path.name}  (mode 600)")
 
-    _heading(6, 6, "Runtime")
+    _heading(7, 7, "Runtime")
     venv = find_venv(root)
     if venv is None:
         _echo("  no virtualenv found here.")
@@ -585,6 +640,16 @@ def run_config_wizard(target: str | None = None) -> int:
     )
     run_path.chmod(0o755)
     _echo(f"  wrote {run_path.name}")
+
+    installed = False
+    if supervise:
+        import getpass as _getpass
+
+        unit = render_systemd_unit(
+            a, python=python, config_path=str(cfg_path),
+            env_path=str(env_path), user=_getpass.getuser(),
+        )
+        installed = install_systemd_unit(unit, unit_name(a), echo=_echo)
 
     _echo("")
     try:
@@ -609,10 +674,91 @@ def run_config_wizard(target: str | None = None) -> int:
         ))
 
     _echo("")
-    _echo("Done. Start the bridge with:")
-    _echo(f"  {run_path}")
+    if installed:
+        _echo("Done. It is running now and will start at boot.")
+        _echo(f"  systemctl status {unit_name(a)}")
+        _echo(f"  journalctl -u {unit_name(a)} -f")
+    else:
+        _echo("Done. Start the bridge with:")
+        _echo(f"  {run_path}")
+        if a.log_file:
+            _echo(f"  logs: {a.log_file}")
     if a.backend == "aioc" and a.cos_mode == "internal_audio":
         _echo("")
         _echo("Calibrate the COS threshold against a squelched radio first:")
         _echo(f"  {python} -m zello_link --config {cfg_path} --cos-monitor")
     return 0
+
+
+# -- systemd --------------------------------------------------------------
+def systemd_available() -> bool:
+    """True when a unit could actually be installed and started."""
+    return (
+        sys.platform.startswith("linux")
+        and os.geteuid() == 0
+        and Path("/run/systemd/system").is_dir()
+    )
+
+
+def unit_name(a: Answers) -> str:
+    return f"zello-link-{a.name}.service"
+
+
+def render_systemd_unit(
+    a: Answers, *, python: str, config_path: str, env_path: str, user: str
+) -> str:
+    """A unit for exactly this instance, with real paths.
+
+    Deliberately not the ``zello-link@.service`` template in the repo: that
+    hardcodes /opt/zello-link, and a wizard run from a checkout would produce
+    a unit pointing at an interpreter that does not exist. The paths here are
+    the ones just verified to work.
+
+    Runs as the user who ran setup, so whatever device group membership was
+    used to test the interface is the membership the service gets. Handing it
+    to a fresh account is how a bridge that worked by hand fails as a service.
+    """
+    return f"""[Unit]
+Description=zello-link bridge - {a.name}
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={user}
+EnvironmentFile={env_path}
+ExecStartPre={python} -m zello_link --config {config_path} --validate
+ExecStart={python} -m zello_link --config {config_path}
+
+Restart=always
+RestartSec=3
+
+# SIGTERM runs the ordered shutdown: stop streams, stop audio, unkey PTT.
+# Give it room rather than being SIGKILLed mid-unkey with the radio keyed.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def install_systemd_unit(text: str, name: str, *, echo: Any = print) -> bool:
+    """Write, enable and start the unit. Never raises."""
+    try:
+        path = Path("/etc/systemd/system") / name
+        path.write_text(text)
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", name], check=True)
+        echo(f"  installed and started {name}")
+        return True
+    except (OSError, subprocess.CalledProcessError) as e:
+        echo(f"  could not install the service: {e}")
+        return False
